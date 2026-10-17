@@ -3,6 +3,7 @@ frontend/dist/
 frontend/*.tsbuildinfo
 backend/.venv/
 backend/aniro.db*
+backend/aniro.*.db
 **/__pycache__/
 *.pyc
 .npm-cache/

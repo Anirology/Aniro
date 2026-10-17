@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models import User, LifeArea, Track, Module, Goal
+from models import User, LifeArea, Track, Module, Goal, Task
 
 def session():
     with SessionLocal() as db: yield db
@@ -51,7 +51,7 @@ class GoalIn(BaseModel):
     track_id: str | None = None
     module_id: str | None = None
     parent_goal_id: str | None = None
-    horizon: Literal["10y", "5y", "2y", "1y", "3mo", "month"]
+    horizon: Literal["10y", "5y", "2y", "1y", "3mo", "month", "week"]
     title: str = Field(min_length=1, max_length=240)
     description: str = ""
     status: Literal["active", "completed"] = "active"
@@ -93,13 +93,17 @@ def validate_goal(db, data: GoalIn, own_id=None):
         if data.parent_goal_id == own_id: raise HTTPException(422, "Goal cannot link to itself")
         parent = get(db, Goal, data.parent_goal_id)
         if parent.user_id != user(db).id: raise HTTPException(404, "Record not found")
-        order = ["10y", "5y", "2y", "1y", "3mo", "month"]
+        order = ["10y", "5y", "2y", "1y", "3mo", "month", "week"]
         if order.index(parent.horizon) >= order.index(data.horizon): raise HTTPException(422, "Parent must be at a longer horizon")
         seen = {own_id}
         while parent.parent_goal_id:
             if parent.parent_goal_id in seen: raise HTTPException(422, "Goal link cycle")
             seen.add(parent.parent_goal_id)
             parent = get(db, Goal, parent.parent_goal_id)
+    if data.horizon == "week":
+        try: start = date.fromisoformat(data.target_date or "")
+        except ValueError: raise HTTPException(422, "Weekly goals need a Monday week start date")
+        if start.weekday() != 0: raise HTTPException(422, "Weekly goals need a Monday week start date")
 
 @app.get("/api/health")
 def health(): return {"ok": True}
@@ -155,6 +159,7 @@ def edit_module(id: str, data: ModuleIn, db: Session = Depends(session)):
 @app.post("/api/goals", status_code=201)
 def add_goal(data: GoalIn, db: Session = Depends(session)):
     validate_goal(db,data)
+    if data.horizon == "week" and not data.target_date: raise HTTPException(422,"Weekly goals need a week start date")
     return save(db,Goal(user_id=user(db).id,**data.model_dump()))
 
 @app.put("/api/goals/{id}")
@@ -162,10 +167,14 @@ def edit_goal(id: str, data: GoalIn, db: Session = Depends(session)):
     obj = get(db,Goal,id)
     if obj.user_id != user(db).id: raise HTTPException(404,"Record not found")
     validate_goal(db,data,id)
+    if data.horizon == "week" and not data.target_date: raise HTTPException(422,"Weekly goals need a week start date")
     for k,v in data.model_dump().items(): setattr(obj,k,v)
     return save(db,obj)
 
 TABLES = {"areas": LifeArea,"tracks": Track,"modules": Module,"goals": Goal}
+
+from plan_api import router as plan_router
+app.include_router(plan_router)
 
 @app.post("/api/{kind}/{id}/archive")
 def archive(kind: str,id: str,restore: bool = False,db: Session = Depends(session)):
@@ -191,11 +200,12 @@ def delete(kind: str,id: str,confirm: bool = Query(False),db: Session = Depends(
         refs = db.scalar(select(Module.id).where(Module.track_id==id).limit(1)) or db.scalar(select(Goal.id).where(Goal.track_id==id).limit(1))
     elif kind == "modules":
         ensure_owner(db,get(db,Track,obj.track_id).life_area_id)
-        refs = db.scalar(select(Goal.id).where(Goal.module_id==id).limit(1))
+        refs = db.scalar(select(Goal.id).where(Goal.module_id==id).limit(1)) or db.scalar(select(Task.id).where(Task.module_id==id).limit(1))
     else:
         if obj.user_id != user(db).id: raise HTTPException(404,"Record not found")
-        refs = db.scalar(select(Goal.id).where(Goal.parent_goal_id==id).limit(1))
+        refs = db.scalar(select(Goal.id).where(Goal.parent_goal_id==id).limit(1)) or db.scalar(select(Task.id).where(Task.goal_id==id).limit(1))
     if refs: raise HTTPException(409,"This item is referenced. Archive it to preserve linked records.")
     db.delete(obj)
     db.commit()
     return {"deleted":True}
+

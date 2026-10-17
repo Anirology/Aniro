@@ -1,0 +1,13 @@
+.dialogHelp{margin:0 0 17px;color:#5f665e;font-size:12px;line-height:1.5}
+.pickerField{border:0;padding:0;margin:0;min-width:0}
+.pickerField legend,.pickerLabel{display:block;padding:0;margin:0 0 7px;color:var(--ink);font-size:12px;font-weight:750}
+.colorGrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.colorChoice{display:flex;align-items:center;flex-direction:column;gap:5px;border:1px solid transparent;border-radius:10px;background:#f7f9f5;padding:7px 2px;color:#50594e;font-size:10px;font-weight:700;min-width:0}
+.colorChoice:hover,.colorChoice.isSelected{border-color:#58684f;background:#fff}
+.colorSwatch{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;border:1px solid #0002;color:#20231f;box-shadow:0 1px 4px #0002}
+.iconPickerTrigger{width:100%;display:flex;align-items:center;gap:10px;background:#fbfcfa;border:1px solid #d9dfd4;border-radius:10px;padding:8px 10px;text-align:left;color:var(--ink);font-size:13px;text-transform:capitalize}
+.iconPickerTrigger span:nth-child(2){flex:1}
+.iconGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;background:#f7f9f5;border:1px solid var(--line);border-radius:12px;padding:9px;margin-top:7px}
+.iconChoice{display:grid;place-items:center;height:44px;min-width:0;border:1px solid transparent;border-radius:9px;background:#fff;color:#3c4b3c}
+.iconChoice:hover,.iconChoice.isSelected{border-color:#68952b;background:#e9f9c5;color:#20231f}
+@media(max-width:400px){.colorGrid{grid-template-columns:repeat(4,minmax(0,1fr))}.colorChoice{padding:6px 2px}}

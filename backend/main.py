@@ -175,6 +175,8 @@ TABLES = {"areas": LifeArea,"tracks": Track,"modules": Module,"goals": Goal}
 
 from plan_api import router as plan_router
 app.include_router(plan_router)
+from stage3_api import router as stage3_router
+app.include_router(stage3_router)
 
 @app.post("/api/{kind}/{id}/archive")
 def archive(kind: str,id: str,restore: bool = False,db: Session = Depends(session)):

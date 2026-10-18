@@ -108,3 +108,71 @@ class CompletionLog(Base):
     result: Mapped[str] = mapped_column(String(20))
     note: Mapped[str] = mapped_column(Text, default="")
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class Habit(Base):
+    __tablename__ = "habits"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
+    track_id: Mapped[str | None] = mapped_column(ForeignKey("tracks.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    frequency_rule: Mapped[str] = mapped_column(String(20), default="daily")
+    color_key: Mapped[str] = mapped_column(String(30), default="lime")
+    created_on: Mapped[str] = mapped_column(String(10))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class HabitCheckin(Base):
+    __tablename__ = "habit_checkins"
+    __table_args__ = (UniqueConstraint("habit_id", "local_date", name="habit_day_unique"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    habit_id: Mapped[str] = mapped_column(ForeignKey("habits.id"), index=True)
+    local_date: Mapped[str] = mapped_column(String(10), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="done")
+
+class BalanceTarget(Base):
+    __tablename__ = "balance_targets"
+    __table_args__ = (UniqueConstraint("user_id", "track_id", name="balance_user_track"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    track_id: Mapped[str] = mapped_column(ForeignKey("tracks.id"), index=True)
+    target_minutes: Mapped[int] = mapped_column(Integer)
+
+class ReflectSettings(Base):
+    __tablename__ = "reflect_settings"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    coach_trigger_count: Mapped[int] = mapped_column(Integer, default=2)
+
+class AreaBalanceTarget(Base):
+    __tablename__ = "area_balance_targets"
+    __table_args__ = (UniqueConstraint("user_id", "life_area_id", name="balance_user_area"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
+    target_minutes: Mapped[int] = mapped_column(Integer)
+
+class BudgetMonth(Base):
+    __tablename__ = "budget_months"
+    __table_args__ = (UniqueConstraint("user_id", "year", "month", name="budget_user_month"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="LKR")
+    limit_minor: Mapped[int] = mapped_column(Integer)
+
+class ExpenseCategory(Base):
+    __tablename__ = "expense_categories"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    color_key: Mapped[str] = mapped_column(String(30), default="lime")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class Expense(Base):
+    __tablename__ = "expenses"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    budget_month_id: Mapped[str] = mapped_column(ForeignKey("budget_months.id"), index=True)
+    category_id: Mapped[str] = mapped_column(ForeignKey("expense_categories.id"), index=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    spent_on: Mapped[str] = mapped_column(String(10), index=True)
+    description: Mapped[str] = mapped_column(String(240), default="")

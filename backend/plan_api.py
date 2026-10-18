@@ -108,6 +108,14 @@ class BlockIn(BaseModel):
     start_at: datetime
     end_at: datetime
 
+class TaskBlockIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    goal_id: str | None = None
+    module_id: str | None = None
+    week_start: str
+    start_at: datetime
+    end_at: datetime
+
 class ResultIn(BaseModel):
     status: Status
     actual_minutes: int | None = Field(default=None, ge=0, le=10080)
@@ -223,7 +231,11 @@ def edit_task(id: str, data: TaskIn, db: Session = Depends(session)):
     validate_task(db, data)
     if task.week_start != data.week_start and db.scalar(select(CalendarBlock.id).where(CalendarBlock.task_id == id).limit(1)):
         raise HTTPException(409, "Move or remove scheduled blocks before changing the task week")
+    title_changed = task.title != data.title
     for key, value in task_values(data).items(): setattr(task, key, value)
+    if title_changed:
+        for block in db.scalars(select(CalendarBlock).where(CalendarBlock.task_id == id, CalendarBlock.google_event_id.is_not(None))):
+            block.sync_state = "pending_update"
     return commit(db, task)
 
 @router.post("/tasks/{id}/archive")
@@ -265,13 +277,33 @@ def add_block(data: BlockIn, db: Session = Depends(session)):
     start, end = validate_block(db, data)
     return commit(db, CalendarBlock(task_id=data.task_id, start_at=start, end_at=end))
 
+@router.post("/task-blocks", status_code=201)
+def add_task_block(data: TaskBlockIn, db: Session = Depends(session)):
+    minutes = round((utc_naive(data.end_at) - utc_naive(data.start_at)).total_seconds() / 60)
+    if minutes <= 0 or minutes > 1440: raise HTTPException(422, "A task block must be longer than zero and no more than 24 hours")
+    task_data = TaskIn(title=data.title, goal_id=data.goal_id, module_id=data.module_id,
+                       week_start=data.week_start, estimate_minutes=minutes)
+    validate_task(db, task_data)
+    task = Task(user_id=current_user(db).id, **task_values(task_data))
+    db.add(task)
+    db.flush()
+    start, end = validate_block(db, BlockIn(task_id=task.id, start_at=data.start_at, end_at=data.end_at))
+    block = CalendarBlock(task_id=task.id, start_at=start, end_at=end)
+    db.add(block)
+    db.commit()
+    db.refresh(task)
+    db.refresh(block)
+    return {"task": encoded(task), "block": encoded(block)}
+
 @router.put("/calendar-blocks/{id}")
 def edit_block(id: str, data: BlockIn, db: Session = Depends(session)):
     block = owner_block(db, id)
     if block.task_id != data.task_id and db.scalar(select(CompletionLog.id).where(CompletionLog.calendar_block_id == id).limit(1)):
         raise HTTPException(409, "Completed block cannot move to another task")
     start, end = validate_block(db, data, id)
+    changed = (block.task_id, block.start_at, block.end_at) != (data.task_id, start, end)
     block.task_id, block.start_at, block.end_at = data.task_id, start, end
+    if changed and block.google_event_id: block.sync_state = "pending_update"
     return commit(db, block)
 
 @router.post("/calendar-blocks/{id}/result")
@@ -294,6 +326,7 @@ def block_result(id: str, data: ResultIn, db: Session = Depends(session)):
 @router.post("/calendar-blocks/{id}/archive")
 def archive_block(id: str, restore: bool = False, db: Session = Depends(session)):
     block = owner_block(db, id)
+    if block.google_event_id: raise HTTPException(409, "Remove the Google event first from the block editor")
     block.archived_at = None if restore else datetime.now(timezone.utc)
     return commit(db, block)
 
@@ -301,6 +334,7 @@ def archive_block(id: str, restore: bool = False, db: Session = Depends(session)
 def delete_block(id: str, confirm: bool = Query(False), db: Session = Depends(session)):
     if not confirm: raise HTTPException(400, "Deletion requires confirmation")
     block = owner_block(db, id)
+    if block.google_event_id: raise HTTPException(409, "Remove the Google event first from the block editor")
     if db.scalar(select(CompletionLog.id).where(CompletionLog.calendar_block_id == id).limit(1)):
         raise HTTPException(409, "Block has completion history. Archive it instead.")
     db.delete(block)

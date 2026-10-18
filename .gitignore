@@ -4,6 +4,12 @@ frontend/*.tsbuildinfo
 backend/.venv/
 backend/aniro.db*
 backend/aniro.*.db
+backend/.env
+backend/google_oauth_client.json
+backend/.token_key
+.edge_*/
+.chrome_stage4/
+stage4-*.png
 **/__pycache__/
 *.pyc
 .npm-cache/

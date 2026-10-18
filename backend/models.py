@@ -48,7 +48,7 @@ class Module(Base):
 
 class Goal(Base):
     __tablename__ = "goals"
-    __table_args__ = (CheckConstraint("horizon IN ('10y','5y','2y','1y','3mo','month','week')", name="goal_horizon"),)
+    __table_args__ = (CheckConstraint("horizon IN ('10y','5y','3y','2y','1y','3mo','month','week')", name="goal_horizon"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
@@ -176,3 +176,22 @@ class Expense(Base):
     amount_minor: Mapped[int] = mapped_column(Integer)
     spent_on: Mapped[str] = mapped_column(String(10), index=True)
     description: Mapped[str] = mapped_column(String(240), default="")
+
+class GoogleIntegration(Base):
+    __tablename__ = "google_integrations"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    account_email: Mapped[str | None] = mapped_column(String(240))
+    selected_calendar_id: Mapped[str | None] = mapped_column(String(240))
+    encrypted_token: Mapped[str | None] = mapped_column(Text)
+    oauth_state: Mapped[str | None] = mapped_column(String(120))
+    code_verifier: Mapped[str | None] = mapped_column(String(160))
+    oauth_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+class CoachUsage(Base):
+    __tablename__ = "coach_usage"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_version: Mapped[str] = mapped_column(String(20), default="prd-v1")
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)

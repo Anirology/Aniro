@@ -51,7 +51,7 @@ class GoalIn(BaseModel):
     track_id: str | None = None
     module_id: str | None = None
     parent_goal_id: str | None = None
-    horizon: Literal["10y", "5y", "2y", "1y", "3mo", "month", "week"]
+    horizon: Literal["10y", "5y", "3y", "2y", "1y", "3mo", "month", "week"]
     title: str = Field(min_length=1, max_length=240)
     description: str = ""
     status: Literal["active", "completed"] = "active"
@@ -93,7 +93,7 @@ def validate_goal(db, data: GoalIn, own_id=None):
         if data.parent_goal_id == own_id: raise HTTPException(422, "Goal cannot link to itself")
         parent = get(db, Goal, data.parent_goal_id)
         if parent.user_id != user(db).id: raise HTTPException(404, "Record not found")
-        order = ["10y", "5y", "2y", "1y", "3mo", "month", "week"]
+        order = ["10y", "5y", "3y", "2y", "1y", "3mo", "month", "week"]
         if order.index(parent.horizon) >= order.index(data.horizon): raise HTTPException(422, "Parent must be at a longer horizon")
         seen = {own_id}
         while parent.parent_goal_id:
@@ -177,6 +177,8 @@ from plan_api import router as plan_router
 app.include_router(plan_router)
 from stage3_api import router as stage3_router
 app.include_router(stage3_router)
+from stage4_api import router as stage4_router
+app.include_router(stage4_router)
 
 @app.post("/api/{kind}/{id}/archive")
 def archive(kind: str,id: str,restore: bool = False,db: Session = Depends(session)):

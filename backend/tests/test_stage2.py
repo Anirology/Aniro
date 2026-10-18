@@ -1,12 +1,12 @@
 import unittest
 from datetime import datetime
 from fastapi import HTTPException
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select, func
 from sqlalchemy.orm import Session
 from db import Base
-from models import LifeArea, Track, Module
+from models import LifeArea, Track, Module, Task
 from main import GoalIn, add_goal
-from plan_api import TaskIn, BlockIn, ResultIn, add_task, add_block, block_result, task_result, completion_totals, plan
+from plan_api import TaskIn, BlockIn, TaskBlockIn, ResultIn, add_task, add_block, add_task_block, block_result, task_result, completion_totals, plan
 
 WEEK = "2026-10-12"
 
@@ -59,6 +59,20 @@ class Stage2Tests(unittest.TestCase):
         self.assertEqual(completion_totals(self.db, self._user_id(), WEEK)["completed_tasks"], 1)
         task_result(task["id"], ResultIn(status="planned"), self.db)
         self.assertEqual(completion_totals(self.db, self._user_id(), WEEK)["completed_minutes"], 0)
+
+    def test_slot_creates_linked_task_and_block_without_orphan_on_conflict(self):
+        first = add_task_block(TaskBlockIn(title="Math practice", goal_id=self.goal["id"], week_start=WEEK,
+                       start_at=datetime.fromisoformat("2026-10-12T09:00:00+00:00"),
+                       end_at=datetime.fromisoformat("2026-10-12T10:00:00+00:00")),self.db)
+        self.assertEqual(first["task"]["module_id"],self.module.id)
+        self.assertEqual(first["block"]["task_id"],first["task"]["id"])
+        with self.assertRaises(HTTPException) as conflict:
+            add_task_block(TaskBlockIn(title="Overlapping task", week_start=WEEK,
+                           start_at=datetime.fromisoformat("2026-10-12T09:30:00+00:00"),
+                           end_at=datetime.fromisoformat("2026-10-12T10:30:00+00:00")),self.db)
+        self.assertEqual(conflict.exception.status_code,409)
+        self.db.rollback()
+        self.assertEqual(self.db.scalar(select(func.count(Task.id))),1)
 
 if __name__ == "__main__":
     unittest.main()

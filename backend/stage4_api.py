@@ -152,7 +152,7 @@ def google_start(db: Session = Depends(session)):
     record = integration(db, True)
     record.oauth_state = secrets.token_urlsafe(32)
     record.code_verifier = secrets.token_urlsafe(64)
-    record.oauth_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
+    record.oauth_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     record.last_error = None
     db.commit()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(record.code_verifier.encode()).digest()).rstrip(b"=").decode()
@@ -164,7 +164,10 @@ def google_start(db: Session = Depends(session)):
 @router.get("/integrations/google/callback")
 def google_callback(state: str = "", code: str = "", error: str = "", db: Session = Depends(session)):
     record = integration(db)
-    if not record or not state or not secrets.compare_digest(state, record.oauth_state or "") or not record.oauth_expires_at or record.oauth_expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
+    expiry = record.oauth_expires_at if record else None
+    if expiry and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if not record or not state or not secrets.compare_digest(state, record.oauth_state or "") or not expiry or expiry < datetime.now(timezone.utc):
         raise HTTPException(400, "Google connection expired or state did not match. Start again from Plan.")
     verifier = record.code_verifier
     record.oauth_state = record.code_verifier = None

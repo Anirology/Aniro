@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
@@ -139,6 +139,8 @@ class Stage4Tests(unittest.TestCase):
             self.assertIn("code_challenge", redirect.headers["location"])
             self.assertIn("calendar.events.owned", redirect.headers["location"])
             state = self.db.get(GoogleIntegration, self.user.id).oauth_state
+            # PostgreSQL returns timezone-aware timestamps; SQLite commonly returns naive ones.
+            self.db.get(GoogleIntegration, self.user.id).oauth_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
             response = google_callback(state=state,code="code",db=self.db)
             self.assertIn("connected", response.headers["location"])
             self.assertEqual(status(self.db)["account_email"], "aniruththens@gmail.com")

@@ -10,7 +10,7 @@ from models import LifeArea, Goal, Task, CalendarBlock, BudgetMonth, ExpenseCate
 from plan_api import current_user, edit_block, BlockIn
 from stage4_api import (CalendarChoice, CalendarEventIn, CoachIn, Confirm, RemoteError, ask, calendars, choose_calendar,
                         coach_context, create_calendar_event, update_calendar_event, delete_calendar_event,
-                        disconnect, events, google_callback, google_start, protect,
+                        access_token, disconnect, events, google_callback, google_start, protect,
                         remove_synced_block, status, sync_block, unprotect)
 
 WEEK = "2026-10-12"
@@ -46,6 +46,33 @@ class Stage4Tests(unittest.TestCase):
         self.assertEqual(unprotect(cipher)["refresh_token"], "private")
         with self.assertRaises(Exception): unprotect(cipher[:-3] + "ABC")
 
+    def test_refresh_network_failure_keeps_valid_connection(self):
+        from fastapi import HTTPException
+        record = GoogleIntegration(user_id=self.user.id, encrypted_token=protect({"access_token":"old", "refresh_token":"refresh", "created_at":0, "expires_in":3600}))
+        self.db.add(record)
+        self.db.commit()
+        with patch("stage4_api.http_json", side_effect=RemoteError(503, "Provider is unreachable")):
+            with self.assertRaises(HTTPException) as failed:
+                access_token(self.db, record)
+        self.assertEqual(failed.exception.status_code, 503)
+        self.assertEqual(record.last_error, "Provider is unreachable")
+        self.assertTrue(status(self.db)["connected"])
+        self.assertEqual(unprotect(record.encrypted_token)["refresh_token"], "refresh")
+        with patch("stage4_api.http_json", return_value={"access_token":"fresh", "expires_in":3600}):
+            self.assertEqual(access_token(self.db, record), "fresh")
+        self.assertIsNone(record.last_error)
+
+    def test_refresh_invalid_grant_requires_reconnection(self):
+        from fastapi import HTTPException
+        record = GoogleIntegration(user_id=self.user.id, encrypted_token=protect({"access_token":"old", "refresh_token":"refresh", "created_at":0, "expires_in":3600}))
+        self.db.add(record)
+        self.db.commit()
+        with patch("stage4_api.http_json", side_effect=RemoteError(400, "Provider returned HTTP 400", "invalid_grant")):
+            with self.assertRaises(HTTPException) as failed:
+                access_token(self.db, record)
+        self.assertEqual(failed.exception.status_code, 409)
+        self.assertIn("reconnection", record.last_error)
+
     def test_direct_calendar_event_create_edit_delete_and_linked_block_guard(self):
         record = GoogleIntegration(user_id=self.user.id, selected_calendar_id="aniruththens@gmail.com", encrypted_token="mock")
         self.db.add(record)
@@ -76,6 +103,23 @@ class Stage4Tests(unittest.TestCase):
             with self.assertRaises(HTTPException) as blocked:
                 update_calendar_event(created["id"],data,self.db)
             self.assertEqual(blocked.exception.status_code,409)
+
+    def test_imported_google_block_never_writes_or_deletes_original(self):
+        from fastapi import HTTPException
+        self.db.add(GoogleIntegration(user_id=self.user.id, selected_calendar_id="owned@example.com", encrypted_token="mock"))
+        self.block.google_event_id = "existing-event"
+        self.block.sync_state = "imported"
+        self.db.commit()
+        with patch("stage4_api.google_call") as remote:
+            with self.assertRaises(HTTPException):
+                sync_block(self.block.id, Confirm(confirm=True), self.db)
+            with self.assertRaises(HTTPException):
+                edit_block(self.block.id, BlockIn(task_id=self.task.id,
+                    start_at=datetime(2026,10,13,10,tzinfo=timezone.utc),
+                    end_at=datetime(2026,10,13,11,tzinfo=timezone.utc)), self.db)
+            removed = remove_synced_block(self.block.id, Confirm(confirm=True), self.db)
+            self.assertFalse(removed["google_deleted"])
+            remote.assert_not_called()
 
     def test_oauth_calendar_read_write_retry_edit_delete_disconnect(self):
         calls = []
@@ -144,12 +188,18 @@ class Stage4Tests(unittest.TestCase):
         captured = {}
         def fake_gemini(method,url,*,data=None,form=False,token=None,key=None):
             captured["payload"] = data
-            return {"candidates":[{"content":{"parts":[{"text":"Focus on one realistic task this week."}]}}],"usageMetadata":{"candidatesTokenCount":9}}
+            return {"candidates":[{"content":{"parts":[{"text":"Focus on **one realistic task** this week. Give it a short time block."}]}}],"usageMetadata":{"candidatesTokenCount":9}}
         with patch("stage4_api.setting",side_effect=lambda name:"key" if name=="ANIRO_GEMINI_API_KEY" else ""), patch("stage4_api.http_json",side_effect=fake_gemini):
-            answer = ask(CoachIn(question="Help me plan",week=WEEK,use_gemini=True),self.db)
+            answer = ask(CoachIn(question="Help me plan",week=WEEK,use_gemini=True,
+                                 history=[{"role":"user","text":"I have a study goal."},
+                                          {"role":"assistant","text":"Start with one session."}]),self.db)
         self.assertEqual(answer["source"],"gemini")
-        self.assertLessEqual(len(answer["answer"].split()),80)
-        self.assertIn("You are Abdaal",captured["payload"]["systemInstruction"]["parts"][0]["text"])
+        self.assertNotIn("**",answer["answer"])
+        self.assertIn("\n\n",answer["answer"])
+        self.assertIn("You are Aniru",captured["payload"]["systemInstruction"]["parts"][0]["text"])
+        self.assertEqual([turn["role"] for turn in captured["payload"]["contents"]],["user","model","user"])
+        self.assertEqual(captured["payload"]["generationConfig"]["maxOutputTokens"],1024)
+        self.assertEqual(captured["payload"]["generationConfig"]["thinkingConfig"]["thinkingLevel"],"low")
         self.assertNotIn("Riya",json.dumps(captured["payload"]))
         self.assertNotIn("Private purchase",json.dumps(captured["payload"]))
         self.assertEqual(self.db.scalar(select(Expense).where(Expense.budget_month_id==budget.id)).description,"Private purchase")

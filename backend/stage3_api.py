@@ -2,17 +2,20 @@
 import csv
 import io
 import json
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, insert, update, DateTime
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models import (User, LifeArea, Track, Module, Goal, WeeklyPlan, Task, CalendarBlock,
+from models import (User, LifeArea, Track, Module, Vision, Goal, WeeklyPlan, Task, CalendarBlock,
                     CompletionLog, Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings,
-                    BudgetMonth, ExpenseCategory, Expense)
+                    BudgetMonth, ExpenseCategory, Expense, GoogleIntegration, CoachUsage, BackupSnapshot)
 
 router = APIRouter(prefix="/api")
 
@@ -101,6 +104,12 @@ class CategoryIn(BaseModel):
 
 class ExpenseIn(BaseModel):
     category_id: str
+    amount_minor: int = Field(gt=0, le=1_000_000_000)
+    spent_on: str
+    description: str = Field(default="", max_length=240)
+
+class QuickExpenseIn(BaseModel):
+    category_name: str = Field(min_length=1, max_length=120)
     amount_minor: int = Field(gt=0, le=1_000_000_000)
     spent_on: str
     description: str = Field(default="", max_length=240)
@@ -209,7 +218,8 @@ def streak_stats(habit: Habit, checked: set[str], today: date):
     start = max(day(habit.created_on), today - timedelta(days=29))
     relevant = [today - timedelta(days=n) for n in range(29, -1, -1)
                 if today - timedelta(days=n) >= start and (habit.frequency_rule != "weekdays" or (today - timedelta(days=n)).weekday() < 5)]
-    rate = round(100 * sum(d.isoformat() in checked for d in relevant) / len(relevant)) if relevant else 0
+    checked_count = sum(d.isoformat() in checked for d in relevant)
+    rate = round(100 * checked_count / len(relevant)) if relevant else 0
     cursor = today
     if habit.frequency_rule == "weekdays":
         while cursor.weekday() >= 5:
@@ -225,7 +235,8 @@ def streak_stats(habit: Habit, checked: set[str], today: date):
             break
         streak += 1
         cursor -= timedelta(days=1)
-    return {"consistency_pct": rate, "current_streak": streak}
+    return {"consistency_pct": rate, "consistency_checked": checked_count,
+            "consistency_eligible": len(relevant), "current_streak": streak}
 
 def reflect_summary(db: Session, week: str, today_override: date | None = None):
     start = week_start(week)
@@ -237,7 +248,8 @@ def reflect_summary(db: Session, week: str, today_override: date | None = None):
     area_map = {a.id: a for a in areas}
     track_map = {t.id: t for t in tracks}
     module_map = {m.id: m for m in modules}
-    goals = {g.id: g for g in db.scalars(select(Goal).where(Goal.user_id == u.id))}
+    goals = {g.id: g for g in db.scalars(select(Goal).where(Goal.user_id == u.id, Goal.target_date == week))}
+    visions = {v.id: v for v in db.scalars(select(Vision).where(Vision.user_id == u.id))}
     tasks = list(db.scalars(select(Task).where(Task.user_id == u.id, Task.week_start == week)))
     task_map = {t.id: t for t in tasks}
     blocks = list(db.scalars(select(CalendarBlock).where(CalendarBlock.task_id.in_(task_map)))) if tasks else []
@@ -281,6 +293,32 @@ def reflect_summary(db: Session, week: str, today_override: date | None = None):
         activity_date = activity.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(u.timezone)).date().isoformat()
         if row["last_activity_date"] is None or activity_date > row["last_activity_date"]:
             row["last_activity_date"] = activity_date
+    goal_rows = {}
+    for goal in goals.values():
+        area = area_map.get(goal.life_area_id)
+        vision = visions.get(goal.parent_vision_id)
+        goal_rows[goal.id] = {"id": goal.id, "title": goal.title, "status": goal.status,
+                              "archived": goal.archived_at is not None,
+                              "area_id": goal.life_area_id, "area_name": area.name if area else "Area",
+                              "color_key": area.color_key if area else "lime",
+                              "vision_id": vision.id if vision else None,
+                              "vision_title": vision.title if vision else None,
+                              "task_count": 0, "completed_tasks": 0,
+                              "planned_minutes": 0, "completed_minutes": 0,
+                              "sort_order": goal.sort_order}
+    for task in tasks:
+        row = goal_rows.get(task.goal_id)
+        if row:
+            row["task_count"] += 1
+            row["completed_tasks"] += task.status == "done"
+    for block in blocks:
+        row = goal_rows.get(task_map[block.task_id].goal_id)
+        if row and block.archived_at is None:
+            row["planned_minutes"] += round((block.end_at - block.start_at).total_seconds() / 60)
+    for log in logs:
+        row = goal_rows.get(task_map[log.task_id].goal_id)
+        if row:
+            row["completed_minutes"] += log.completed_minutes
     settings = db.get(ReflectSettings, u.id)
     trigger = settings.coach_trigger_count if settings else 2
     prompts = []
@@ -315,6 +353,7 @@ def reflect_summary(db: Session, week: str, today_override: date | None = None):
                            "completed_minutes": sum(r["completed_minutes"] for r in rows)})
     return {"week": week, "today": today.isoformat(), "timezone": u.timezone, "areas": [dump(a) for a in areas],
             "tracks": [dump(t) for t in tracks], "habits": habit_rows,
+            "goals": sorted(goal_rows.values(), key=lambda r: (r["sort_order"], r["title"])),
             "modules": sorted(group_rows, key=lambda r: (r["area_name"], r["track_name"], r["module_name"])),
             "balance": balance_rows, "prompts": prompts, "coach_trigger_count": trigger,
             "totals": {"planned_minutes": sum(r["planned_minutes"] for r in group_rows),
@@ -416,6 +455,26 @@ def add_expense(data: ExpenseIn, db: Session = Depends(session)):
         raise HTTPException(422, "Set this month's budget first")
     return save(db, Expense(budget_month_id=budget.id, **data.model_dump()))
 
+@router.post("/expenses/quick", status_code=201)
+def add_expense_with_category(data: QuickExpenseIn, db: Session = Depends(session)):
+    name = data.category_name.strip()
+    if not name:
+        raise HTTPException(422, "Enter a category name")
+    spent_on = day(data.spent_on)
+    budget = budget_for(db, spent_on.year, spent_on.month)
+    if budget is None:
+        raise HTTPException(422, "Set this month's budget first")
+    category = ExpenseCategory(user_id=user(db).id, name=name, color_key="lime")
+    db.add(category)
+    db.flush()
+    expense = Expense(budget_month_id=budget.id, category_id=category.id,
+                      amount_minor=data.amount_minor, spent_on=data.spent_on,
+                      description=data.description)
+    db.add(expense)
+    db.commit()
+    db.refresh(expense)
+    return dump(expense)
+
 @router.put("/expenses/{id}")
 def edit_expense(id: str, data: ExpenseIn, db: Session = Depends(session)):
     expense = get(db, Expense, id)
@@ -442,8 +501,107 @@ def delete_expense(id: str, confirm: bool = Query(False), db: Session = Depends(
     db.commit()
     return {"deleted": True}
 
-EXPORT_TABLES = (LifeArea, Track, Module, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog,
+EXPORT_TABLES = (LifeArea, Track, Module, Vision, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog,
                  Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings, BudgetMonth, ExpenseCategory, Expense)
+
+def validate_backup(payload: dict):
+    if payload.get("format") != "aniro-json-v1" or not isinstance(payload.get("user"), dict):
+        raise HTTPException(422, "Choose an Aniro JSON backup")
+    tables = payload.get("tables")
+    if not isinstance(tables, dict) or set(tables) != {cls.__tablename__ for cls in EXPORT_TABLES}:
+        raise HTTPException(422, "Backup tables do not match this version of Aniro")
+    source_user = payload["user"].get("id")
+    if not isinstance(source_user, str) or not source_user:
+        raise HTTPException(422, "Backup user is missing")
+    total = 0
+    for cls in EXPORT_TABLES:
+        rows = tables[cls.__tablename__]
+        if not isinstance(rows, list) or len(rows) > 100_000:
+            raise HTTPException(422, "Backup table is invalid or too large")
+        columns = {column.name for column in cls.__table__.columns}
+        ids = set()
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != columns or not isinstance(row.get("id", row.get("user_id")), str):
+                raise HTTPException(422, f"Invalid {cls.__tablename__} record")
+            if "user_id" in row and row["user_id"] != source_user:
+                raise HTTPException(422, "Backup includes records from another user")
+            identifier = row.get("id", row.get("user_id"))
+            if identifier in ids:
+                raise HTTPException(422, f"Duplicate {cls.__tablename__} record")
+            ids.add(identifier)
+        total += len(rows)
+    return total
+
+@router.post("/import/preview")
+def preview_backup(payload: dict):
+    total = validate_backup(payload)
+    return {"records": total, "exported_at": payload.get("exported_at"),
+            "tables": {name: len(rows) for name, rows in payload["tables"].items()}}
+
+@router.post("/import/restore")
+def restore_backup(payload: dict, confirm: bool = Query(False), db: Session = Depends(session)):
+    if not confirm:
+        raise HTTPException(400, "Restoring requires confirmation")
+    total = validate_backup(payload)
+    bind = db.get_bind()
+    if bind.dialect.name == "sqlite" and bind.url.database and bind.url.database != ":memory:":
+        source = Path(bind.url.database)
+        backup_dir = source.parent / "backups"
+        backup_dir.mkdir(exist_ok=True)
+        snapshot = backup_dir / f"aniro-before-restore-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')}.db"
+        with closing(sqlite3.connect(source)) as original, closing(sqlite3.connect(snapshot)) as saved:
+            original.backup(saved)
+        snapshot_name = str(snapshot)
+    elif bind.dialect.name == "postgresql":
+        snapshot = BackupSnapshot(payload=export_json(db).body.decode("utf-8"))
+        db.add(snapshot)
+        db.commit()
+        snapshot_name = snapshot.id
+    else:
+        raise HTTPException(501, "Restore requires persistent SQLite or Postgres storage")
+
+    current_user = user(db)
+    source_user = payload["user"]["id"]
+    try:
+        for cls in reversed(EXPORT_TABLES):
+            db.execute(delete(cls))
+        db.execute(delete(GoogleIntegration))
+        db.execute(delete(CoachUsage))
+        pending_vision_links = []
+        for cls in EXPORT_TABLES:
+            for raw in payload["tables"][cls.__tablename__]:
+                row = dict(raw)
+                if row.get("user_id") == source_user:
+                    row["user_id"] = current_user.id
+                for column in cls.__table__.columns:
+                    if isinstance(column.type, DateTime) and row[column.name] is not None:
+                        row[column.name] = datetime.fromisoformat(row[column.name])
+                if cls is Vision and row["parent_vision_id"]:
+                    pending_vision_links.append((row["id"], row["parent_vision_id"]))
+                    row["parent_vision_id"] = None
+                db.execute(insert(cls).values(**row))
+        for child_id, parent_id in pending_vision_links:
+            db.execute(update(Vision).where(Vision.id == child_id).values(parent_vision_id=parent_id))
+        imported_user = payload["user"]
+        current_user.display_name = imported_user.get("display_name") or current_user.display_name
+        current_user.timezone = imported_user.get("timezone") or current_user.timezone
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(422, f"Backup could not be restored: {type(exc).__name__}") from exc
+    return {"restored": total, "snapshot": snapshot_name, "local_snapshot": snapshot_name}
+
+@router.get("/import/snapshots")
+def backup_snapshots(db: Session = Depends(session)):
+    if db.get_bind().dialect.name != "postgresql": return {"snapshots": []}
+    rows = db.scalars(select(BackupSnapshot).order_by(BackupSnapshot.created_at.desc()).limit(20))
+    return {"snapshots": [{"id": row.id, "created_at": row.created_at.isoformat()} for row in rows]}
+
+@router.get("/import/snapshots/{id}")
+def download_snapshot(id: str, db: Session = Depends(session)):
+    snapshot = get(db, BackupSnapshot, id)
+    return Response(snapshot.payload, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="aniro-snapshot-{id}.json"'})
 
 @router.get("/export/json")
 def export_json(db: Session = Depends(session)):
@@ -454,7 +612,7 @@ def export_json(db: Session = Depends(session)):
     habit_ids = select(Habit.id).where(Habit.user_id == u.id)
     budget_ids = select(BudgetMonth.id).where(BudgetMonth.user_id == u.id)
     filters = {LifeArea: LifeArea.user_id == u.id, Track: Track.life_area_id.in_(area_ids),
-               Module: Module.track_id.in_(track_ids), Goal: Goal.user_id == u.id,
+               Module: Module.track_id.in_(track_ids), Vision: Vision.user_id == u.id, Goal: Goal.user_id == u.id,
                WeeklyPlan: WeeklyPlan.user_id == u.id, Task: Task.user_id == u.id,
                CalendarBlock: CalendarBlock.task_id.in_(task_ids), CompletionLog: CompletionLog.task_id.in_(task_ids),
                Habit: Habit.user_id == u.id, HabitCheckin: HabitCheckin.habit_id.in_(habit_ids),

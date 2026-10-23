@@ -1,14 +1,16 @@
 import json
 import unittest
 from datetime import date, datetime
+from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from db import Base
-from models import LifeArea, Track, Module, Habit, HabitCheckin
+from models import LifeArea, Track, Module, Habit, HabitCheckin, ExpenseCategory, Expense
 from plan_api import current_user, TaskIn, BlockIn, ResultIn, add_task, add_block, block_result
-from main import GoalIn, add_goal
-from stage3_api import (streak_stats, reflect_summary, BudgetIn, CategoryIn, ExpenseIn,
-                        set_budget, add_category, add_expense, edit_expense, delete_expense,
+from main import GoalIn, VisionIn, add_goal, add_vision
+from stage3_api import (streak_stats, reflect_summary, BudgetIn, CategoryIn, ExpenseIn, QuickExpenseIn,
+                        set_budget, add_category, add_expense, add_expense_with_category, edit_expense, delete_expense,
                         money_summary, export_json, export_expenses_csv, TargetIn, set_area_target)
 
 WEEK = "2026-10-12"
@@ -37,8 +39,10 @@ class Stage3Tests(unittest.TestCase):
         self.engine.dispose()
 
     def test_reflect_uses_recorded_minutes_and_waits_for_repeated_shortfall(self):
+        vision = add_vision(VisionIn(life_area_id=self.area.id, horizon="3y", title="Build strong BIT foundations"), self.db)
         goal = add_goal(GoalIn(life_area_id=self.area.id, track_id=self.track.id,
-                               module_id=self.module.id, horizon="week", title="Review maths", target_date=WEEK), self.db)
+                               module_id=self.module.id, parent_vision_id=vision["id"],
+                               horizon="week", title="Review maths", target_date=WEEK), self.db)
         task = add_task(TaskIn(goal_id=goal["id"], week_start=WEEK, title="Past papers"), self.db)
         blocks = []
         for hour in (9, 11):
@@ -49,9 +53,13 @@ class Stage3Tests(unittest.TestCase):
         self.assertEqual(first["totals"]["planned_minutes"], 120)
         self.assertEqual(first["totals"]["completed_minutes"], 0)
         self.assertEqual(first["modules"][0]["module_name"], "Mathematics")
+        self.assertEqual(first["goals"][0]["vision_title"], vision["title"])
+        self.assertEqual(first["goals"][0]["planned_minutes"], 120)
+        self.assertEqual(first["goals"][0]["completed_minutes"], 0)
         block_result(blocks[0]["id"], ResultIn(status="partial", actual_minutes=20), self.db)
         one = reflect_summary(self.db, WEEK, date(2026, 10, 18))
         self.assertEqual(one["modules"][0]["completed_minutes"], 20)
+        self.assertEqual(one["goals"][0]["completed_minutes"], 20)
         self.assertEqual(one["prompts"], [])
         block_result(blocks[1]["id"], ResultIn(status="missed"), self.db)
         two = reflect_summary(self.db, WEEK, date(2026, 10, 18))
@@ -96,6 +104,18 @@ class Stage3Tests(unittest.TestCase):
         self.assertTrue(changed["over_budget"])
         delete_expense(first["id"], True, self.db)
         self.assertEqual(money_summary(self.db, "2026-10", date(2026, 10, 18))["spent_minor"], 1000000)
+
+    def test_first_expense_creates_category_only_when_budget_exists(self):
+        payload = QuickExpenseIn(category_name="Study", amount_minor=12500,
+                                 spent_on="2026-10-18", description="Notebook")
+        with self.assertRaises(HTTPException):
+            add_expense_with_category(payload, self.db)
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(ExpenseCategory)), 0)
+        set_budget("2026-10", BudgetIn(limit_minor=4000000), self.db)
+        created = add_expense_with_category(payload, self.db)
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(ExpenseCategory)), 1)
+        self.assertEqual(self.db.get(Expense, created["id"]).amount_minor, 12500)
+        self.assertEqual(money_summary(self.db, "2026-10", date(2026, 10, 18))["spent_minor"], 12500)
 
     def test_fresh_reflect_money_and_exports_contain_no_examples(self):
         reflect = reflect_summary(self.db, WEEK, date(2026, 10, 18))

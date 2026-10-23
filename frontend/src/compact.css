@@ -1,0 +1,93 @@
+/* A quieter shell and a larger planning canvas. */
+:root{background:#e9ece6}
+.shell{padding:6px;gap:6px}
+.sidebar{top:6px;width:188px;min-width:188px;height:calc(100vh - 12px);padding:20px 9px}
+.brand{font-size:27px;padding:0 12px;margin-bottom:33px}
+.navItem{height:43px;padding:0 11px;gap:10px;font-size:13px}
+.sidebarNav{position:relative}
+.sidebarNav .navItem{position:relative;z-index:1}
+.sidebarNav .navItem.selected,.sidebarNav .navItem.selected:hover{background:transparent;color:var(--ink)}
+.navIndicator{position:absolute;z-index:0;border-radius:11px;background:var(--lime);box-shadow:0 2px 12px #c6fb4a24;pointer-events:none}
+.navIndicator.motion{transition:left 380ms cubic-bezier(.22,1,.36,1),top 380ms cubic-bezier(.22,1,.36,1),width 380ms cubic-bezier(.22,1,.36,1),height 380ms cubic-bezier(.22,1,.36,1)}
+.sideFooter{padding:12px;font-size:11px}
+.main{padding:19px 20px 28px}
+@media(max-width:900px) and (min-width:651px){.sidebar{width:156px;min-width:156px}.main{padding:16px 14px 24px}}
+@media(max-width:650px){.shell{padding:0;gap:0}.sidebar{top:0;width:100%;min-width:0;height:auto;padding:8px 12px}.brand{font-size:22px;padding:0;margin:0}.navItem{height:39px;padding:0 8px}.main{padding:18px 12px 24px}}
+
+/* Show eight hours at once, with time-range buttons in the calendar header. */
+.planPage .pageHeader{margin-bottom:9px}
+.planPage .pageHeader h1{font-size:34px;line-height:1.05}
+.planPage .pageHeader p{font-size:12px}
+.planPage .googlePanel{padding:9px 12px;margin-bottom:8px}
+.planPage .googleChoice{margin-top:6px}
+.planPage .googleEvents{margin-top:7px;padding-top:6px}
+.planSummary{gap:7px;margin-bottom:7px}
+.planSummary>div{min-height:67px;padding:8px 11px;border-radius:11px;gap:1px}
+.planSummary strong{font-size:18px;line-height:1.15}
+.planSummary small,.planSummary span,.planSummary button{font-size:10px}
+.planMeta{margin-bottom:7px;font-size:11px}
+.calendarPanel{border-radius:20px;overflow:hidden}
+.calendarTop{padding:10px 14px;align-items:center;flex-wrap:wrap;gap:10px}
+.calendarTop>div:first-child{flex:1 1 235px;min-width:190px}
+.calendarTopActions{flex-shrink:0}
+.calendarTopActions .subtle,.calendarTopActions .primary{border-radius:12px}
+.calendarTop h2{font-size:16px}
+.calendarTop p{font-size:10px}
+.calendarRange{display:flex;align-items:center;gap:5px;padding:0;border:0;background:transparent;flex-wrap:wrap}
+.calendarRange button{border:1px solid var(--line);background:#fff;color:#58655a;border-radius:11px;padding:7px 9px;font-size:10px;font-weight:750;white-space:nowrap}
+.calendarRange button.selected{background:#e8f3d4;border-color:#a9ca75;color:#314e20}
+.calendarViewSwitch{display:flex;gap:3px;padding:3px;border:1px solid var(--line);border-radius:12px;background:#f3f5f0}
+.calendarViewSwitch button{border:0;border-radius:9px;padding:6px 10px;background:transparent;color:#58655a;font-size:11px;font-weight:750;cursor:pointer;white-space:nowrap}
+.calendarViewSwitch button.selected{background:#fff;color:#314e20;box-shadow:0 1px 4px #1726371a}
+.googleWeekCompact{display:grid;grid-template-columns:repeat(7,minmax(115px,1fr));min-width:805px;background:#fff}
+.googleWeekCompactDay{min-width:0;border-right:1px solid #e5e9e2}
+.googleWeekCompactDay:last-child{border-right:0}
+.googleWeekCompactDay.isToday{background:#f8fbff}
+.googleWeekCompactHead{height:43px;display:flex;align-items:center;justify-content:center;gap:7px;border-bottom:1px solid #e5e9e2;color:#757e77;font-size:11px}
+.googleWeekCompactHead strong{display:grid;place-items:center;width:25px;height:25px;border-radius:50%;font-size:14px;color:#26342a}
+.googleWeekCompactDay.isToday .googleWeekCompactHead strong{background:#3d7ddb;color:#fff}
+.googleWeekCompactItems{display:flex;flex-direction:column;gap:6px;padding:8px 5px 12px}
+.googleWeekCompactEvent{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;min-height:48px;padding:7px 8px;border:0;border-left:3px solid #658cd4;border-radius:7px;text-align:left;cursor:pointer}
+.googleWeekCompactEvent:hover{filter:brightness(.96)}
+.googleWeekCompactEvent:focus-visible,.calendarViewSwitch button:focus-visible{outline:3px solid #84b820;outline-offset:2px}
+.googleWeekCompactEvent small{font-size:10px;font-weight:750;white-space:nowrap}
+.googleWeekCompactEvent strong{font-size:11px;line-height:1.25;overflow-wrap:anywhere}
+.googleWeekCompactEmpty{padding:12px 3px;color:#8a928b;font-size:11px;text-align:center}
+.googleCalendarFrame{border-radius:0 0 20px 20px;overflow:hidden}
+.googleWeekScroll{height:auto;overflow:visible}
+.googleWeekScroll.googleWeekCompactScroll{overflow-x:auto}
+.googleWeekBoard{grid-template-columns:45px repeat(7,minmax(0,1fr));min-width:0}
+.googleWeekCorner,.googleWeekDayHead{height:41px;position:relative}
+.googleWeekCorner{font-size:8px;padding-bottom:5px}
+.googleWeekDayHead strong{font-size:15px;width:25px;height:25px}
+.googleWeekAllDayLabel,.googleWeekAllDay{height:28px;position:relative;top:auto}
+.googleWeekAllDayLabel{padding:6px 2px;font-size:8px}
+.googleWeekAllDay{padding:2px;gap:1px}
+.googleWeekAllDay button{font-size:9px;padding:1px 3px}
+.googleWeekHours,.googleWeekColumn{height:336px}
+.googleWeekHours div{height:42px;padding:1px 3px;font-size:8px}
+.googleWeekColumn{background:repeating-linear-gradient(to bottom,#fff 0px,#fff 41px,#e9ede7 41px,#e9ede7 42px)}
+.googleWeekColumn.isToday{background:repeating-linear-gradient(to bottom,#f8fbff 0px,#f8fbff 41px,#e4eaf0 41px,#e4eaf0 42px)}
+.googleWeekEvent{padding:2px 3px;gap:0;min-height:0;border-radius:4px}
+.googleWeekEvent small{font-size:8px}
+.googleWeekEvent strong{font-size:9px;line-height:1.1}
+.googleWeekEvent.isCompact strong{font-size:9px;line-height:10px}
+.googleEmbedFooter{padding:6px 10px;font-size:10px}
+@media(max-width:850px){.googleWeekScroll{overflow-x:auto}.googleWeekBoard{min-width:730px}}
+@media(max-width:1080px){.calendarTop>div:first-child{flex-basis:100%}.calendarRange{flex:1 1 auto}}
+@media(max-width:650px){.planSummary{grid-template-columns:repeat(2,minmax(0,1fr))}.calendarRange{overflow-x:auto;flex-wrap:nowrap}.googleWeekScroll{height:auto}.calendarTop{align-items:flex-start}.googleEmbedFooter{gap:4px}}
+.coachAnswer p{white-space:pre-line}
+
+/* Keep planning controls readable and reachable across the compact layout. */
+.horizonGrid{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));overflow:visible}
+.horizon{min-width:0;padding:14px 11px}
+.goalCard p{font-size:12px}
+.rowActions button,.goalMeta .rowActions button,.smallActions button,.miniActions button,.taskActions button,.plainIcon,.balanceRow>button{min-width:28px;min-height:28px}
+.goalMeta .rowActions svg{width:14px;height:14px}
+.heatmap{grid-template-columns:repeat(7,minmax(24px,1fr))}
+.heatmap button,.heatmap button:disabled{height:26px}
+.googleWeekEvent strong,.googleWeekEvent.isCompact strong{font-size:11px;line-height:1.15}
+.googleWeekEvent small,.googleWeekHours div,.googleWeekDayHead span{font-size:10px}
+.todayPanel button:focus-visible,.reflectionStory a:focus-visible{outline:3px solid #84b820;outline-offset:2px}
+@media(max-width:650px){.horizonGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.horizon{min-width:0}.googleWeekBoard{min-width:730px}}
+@media(max-width:430px){.horizonGrid{grid-template-columns:1fr}}

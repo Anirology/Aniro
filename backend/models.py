@@ -46,16 +46,33 @@ class Module(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     track: Mapped[Track] = relationship(back_populates="modules")
 
-class Goal(Base):
-    __tablename__ = "goals"
-    __table_args__ = (CheckConstraint("horizon IN ('10y','5y','3y','2y','1y','3mo','month','week')", name="goal_horizon"),)
+class Vision(Base):
+    __tablename__ = "visions"
+    __table_args__ = (CheckConstraint("horizon IN ('10y','5y','3y','2y','1y','3mo','month')", name="vision_horizon"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
     track_id: Mapped[str | None] = mapped_column(ForeignKey("tracks.id"), index=True)
     module_id: Mapped[str | None] = mapped_column(ForeignKey("modules.id"), index=True)
-    parent_goal_id: Mapped[str | None] = mapped_column(ForeignKey("goals.id"), index=True)
+    parent_vision_id: Mapped[str | None] = mapped_column(ForeignKey("visions.id"), index=True)
     horizon: Mapped[str] = mapped_column(String(10), index=True)
+    title: Mapped[str] = mapped_column(String(240))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    target_date: Mapped[str | None] = mapped_column(String(10))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class Goal(Base):
+    __tablename__ = "goals"
+    __table_args__ = (CheckConstraint("horizon = 'week'", name="goal_horizon"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
+    track_id: Mapped[str | None] = mapped_column(ForeignKey("tracks.id"), index=True)
+    module_id: Mapped[str | None] = mapped_column(ForeignKey("modules.id"), index=True)
+    parent_vision_id: Mapped[str | None] = mapped_column(ForeignKey("visions.id"), index=True)
+    horizon: Mapped[str] = mapped_column(String(10), default="week", index=True)
     title: Mapped[str] = mapped_column(String(240))
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="active")
@@ -195,3 +212,9 @@ class CoachUsage(Base):
     request_count: Mapped[int] = mapped_column(Integer, default=0)
     prompt_version: Mapped[str] = mapped_column(String(20), default="prd-v1")
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+class BackupSnapshot(Base):
+    __tablename__ = "backup_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    payload: Mapped[str] = mapped_column(Text)

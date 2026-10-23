@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import subprocess
 from urllib.error import HTTPError, URLError
@@ -15,6 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from typing import Literal
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
@@ -24,18 +26,18 @@ from plan_api import current_user, owner_block, encoded, week_date
 
 router = APIRouter(prefix="/api")
 ROOT = Path(__file__).resolve().parent
-FRONTEND = "http://127.0.0.1:5173"
+LOCAL_FRONTEND = "http://127.0.0.1:5173"
 GOOGLE_SCOPES = (
     "openid", "email",
     "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
     "https://www.googleapis.com/auth/calendar.events.owned",
 )
-PROMPT_VERSION = "prd-v1"
-SYSTEM_PROMPT = """You are Abdaal, Aniro's concise AI productivity coach. You are an original assistant inspired by friendly, practical, reflective productivity principles. Do not claim to be Ali Abdaal, imitate his exact wording, or imply his endorsement.
+PROMPT_VERSION = "aniru-chat-v3"
+SYSTEM_PROMPT = """You are Aniru, the user's practical coaching companion in Aniro. Imagine offering the kind of friendly, curious, useful productivity advice the user might seek from Ali Abdaal, while remaining your own original assistant. Never claim to be Ali Abdaal, copy his exact wording, or imply his endorsement.
 
-Help the user turn long-term goals into realistic weekly action, review planned versus completed work, and reason about an LKR personal budget. Be warm, direct, and occasionally challenging without insult or shame. Lead with the answer. Use at most 80 words unless the user explicitly asks for depth. Prefer 1-3 short bullets and at most one useful follow-up question. Avoid slogans and generic praise.
+Respond like a helpful chat, not a report. Answer the user's actual question before suggesting a next step. Keep ordinary replies to about 40-100 words, unless the user asks for detail. Put each thought on its own short line with a blank line between ideas. Never make one dense paragraph. Use plain text, no Markdown symbols or headings. Be warm, direct, and occasionally challenging without insult or shame. Avoid slogans, generic praise, fragments, and unfinished sentences. Ask at most one useful follow-up question.
 
-Use only the structured Aniro context supplied with this request. Distinguish facts, missing data, and suggestions. Never invent a completed task, balance, deadline, or relationship detail. Do not diagnose the user or predict grades, career outcomes, investment returns, or exchange rates. For money questions, provide budgeting arithmetic and options; do not present speculative financial advice as certain.
+Write plain text without Markdown symbols. Use the user's question and the structured Aniro context. You may offer general coaching advice, but distinguish it from facts in Aniro. If the context contains only counts, do not pretend to know task titles or priorities; ask for a specific task when needed. Never invent a completed task, balance, deadline, or relationship detail. Do not diagnose the user or predict grades, career outcomes, investment returns, or exchange rates. For money questions, provide budgeting arithmetic and options; do not present speculative financial advice as certain.
 
 Never modify app records. If a change would help, suggest it and wait for the user to use a visible confirmation control. If context is missing, ask one concise clarifying question. If Gemini is unavailable, the app should show a deterministic insight instead."""
 
@@ -51,12 +53,22 @@ def setting(name: str) -> str:
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     return ""
 
-def redirect_uri(): return setting("ANIRO_GOOGLE_REDIRECT_URI") or "http://127.0.0.1:8000/api/integrations/google/callback"
+def frontend_url():
+    return setting("ANIRO_PUBLIC_URL").rstrip("/") or LOCAL_FRONTEND
+
+def redirect_uri():
+    return setting("ANIRO_GOOGLE_REDIRECT_URI") or (
+        frontend_url() + "/api/integrations/google/callback"
+        if setting("ANIRO_PUBLIC_URL")
+        else "http://127.0.0.1:8000/api/integrations/google/callback"
+    )
 def configured(): return bool(setting("ANIRO_GOOGLE_CLIENT_ID") and setting("ANIRO_GOOGLE_CLIENT_SECRET"))
 
 def _token_key() -> str:
     key = setting("ANIRO_TOKEN_KEY")
     if key: return key
+    if os.getenv("VERCEL"):
+        raise RuntimeError("Set ANIRO_TOKEN_KEY to a persistent secret before connecting Google")
     path = ROOT / ".token_key"
     if not path.exists():
         # Exclusive create; never replace a key that already encrypted tokens.
@@ -67,7 +79,11 @@ def _token_key() -> str:
     return path.read_text(encoding="ascii").strip()
 
 def _crypto(mode: str, payload: str) -> str:
-    if os.name != "nt": raise RuntimeError("This local token store requires Windows")
+    if os.name != "nt":
+        from cryptography.fernet import Fernet
+        cipher = Fernet(_token_key().encode("ascii"))
+        return (cipher.encrypt(payload.encode("utf-8")).decode("ascii")
+                if mode == "encrypt" else cipher.decrypt(payload.encode("ascii")).decode("utf-8"))
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "token_crypto.ps1")],
                             input=json.dumps({"mode": mode, "key": _token_key(), "payload": payload}),
                             text=True, capture_output=True, timeout=15)
@@ -81,7 +97,8 @@ def unprotect(value: str) -> dict:
     return json.loads(_crypto("decrypt", value))
 
 class RemoteError(Exception):
-    def __init__(self, status: int, detail: str): self.status, self.detail = status, detail
+    def __init__(self, status: int, detail: str, provider_code: str | None = None):
+        self.status, self.detail, self.provider_code = status, detail, provider_code
 
 def http_json(method: str, url: str, *, data: dict | None = None, form: bool = False, token: str | None = None, key: str | None = None) -> dict:
     headers = {"Accept": "application/json"}
@@ -97,8 +114,14 @@ def http_json(method: str, url: str, *, data: dict | None = None, form: bool = F
             content = response.read()
             return json.loads(content) if content else {}
     except HTTPError as error:
-        raise RemoteError(error.code, f"Provider returned HTTP {error.code}") from error
+        try:
+            provider_code = json.loads(error.read()).get("error")
+        except (ValueError, AttributeError):
+            provider_code = None
+        raise RemoteError(error.code, f"Provider returned HTTP {error.code}", provider_code if isinstance(provider_code, str) else None) from error
     except (URLError, TimeoutError) as error:
+        if isinstance(getattr(error, "reason", None), PermissionError):
+            raise RemoteError(503, "This Aniro backend cannot reach Google. Restart Aniro from a normal PowerShell session with network access.") from error
         raise RemoteError(503, "Provider is unreachable") from error
 
 def integration(db: Session, create=False):
@@ -147,7 +170,7 @@ def google_callback(state: str = "", code: str = "", error: str = "", db: Sessio
     record.oauth_state = record.code_verifier = None
     record.oauth_expires_at = None
     db.commit()
-    if error or not code: return RedirectResponse(FRONTEND + "/plan?google=denied")
+    if error or not code: return RedirectResponse(frontend_url() + "/plan?google=denied")
     try:
         token = http_json("POST", "https://oauth2.googleapis.com/token", data={
             "client_id": setting("ANIRO_GOOGLE_CLIENT_ID"), "client_secret": setting("ANIRO_GOOGLE_CLIENT_SECRET"),
@@ -170,17 +193,17 @@ def google_callback(state: str = "", code: str = "", error: str = "", db: Sessio
         record.selected_calendar_id = previous_calendar
         record.last_error = None
         db.commit()
-        return RedirectResponse(FRONTEND + "/plan?google=connected")
+        return RedirectResponse(frontend_url() + "/plan?google=connected")
     except (RemoteError, KeyError, RuntimeError) as exc:
         record.last_error = "Google connection failed. Retry from Plan."
         db.commit()
-        return RedirectResponse(FRONTEND + "/plan?google=error")
+        return RedirectResponse(frontend_url() + "/plan?google=error")
 
 def access_token(db: Session, record: GoogleIntegration) -> str:
     if not record.encrypted_token: raise HTTPException(409, "Connect Google Calendar first")
     try: token = unprotect(record.encrypted_token)
     except Exception:
-        record.last_error = "Stored Google token is unavailable for this Windows user. Reconnect."
+        record.last_error = "Stored Google token is unavailable. Reconnect."
         db.commit()
         raise HTTPException(409, record.last_error)
     expires_at = token.get("created_at", 0) + token.get("expires_in", 0)
@@ -199,10 +222,15 @@ def access_token(db: Session, record: GoogleIntegration) -> str:
         record.last_error = None
         db.commit()
         return token["access_token"]
-    except RemoteError:
-        record.last_error = "Google authorization needs reconnection."
+    except RemoteError as exc:
+        if exc.provider_code == "invalid_grant":
+            record.last_error = "Google authorization needs reconnection."
+            status_code = 409
+        else:
+            record.last_error = exc.detail if exc.status == 503 else f"Google token refresh failed (HTTP {exc.status}). Try again later."
+            status_code = 503 if exc.status == 503 else 502
         db.commit()
-        raise HTTPException(409, record.last_error)
+        raise HTTPException(status_code, record.last_error)
 
 def google_call(db: Session, method: str, path: str, data: dict | None = None, params: dict | None = None):
     record = integration(db)
@@ -214,9 +242,9 @@ def google_call(db: Session, method: str, path: str, data: dict | None = None, p
         db.commit()
         return result
     except RemoteError as exc:
-        record.last_error = "Google Calendar could not sync (HTTP %s). %s" % (exc.status, "Reconnect if authorization changed." if exc.status in (401, 403) else "Try again later.")
+        record.last_error = exc.detail if exc.status == 503 else "Google Calendar could not sync (HTTP %s). %s" % (exc.status, "Reconnect if authorization changed." if exc.status in (401, 403) else "Try again later.")
         db.commit()
-        raise HTTPException(502, record.last_error)
+        raise HTTPException(503 if exc.status == 503 else 502, record.last_error)
 
 @router.get("/integrations/google/calendars")
 def calendars(db: Session = Depends(session)):
@@ -353,6 +381,8 @@ def sync_block(id: str, data: Confirm, db: Session = Depends(session)):
     calendar_id = selected(db)
     block = owner_block(db, id)
     if block.archived_at: raise HTTPException(409, "Restore the block before syncing")
+    if block.sync_state == "imported":
+        raise HTTPException(409, "This block links an existing Google event; edit that event in Google Calendar")
     path = "/calendars/" + quote(calendar_id, safe="") + "/events"
     body = event_body(db, block)
     if block.google_event_id:
@@ -377,6 +407,12 @@ def remove_synced_block(id: str, data: Confirm, db: Session = Depends(session)):
     calendar_id = selected(db)
     block = owner_block(db, id)
     if not block.google_event_id: raise HTTPException(409, "Block is not synced")
+    if block.sync_state == "imported":
+        block.google_event_id = None
+        block.sync_state = "local"
+        block.archived_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+        return {"block": encoded(block), "google_deleted": False}
     path = "/calendars/" + quote(calendar_id, safe="") + "/events/" + quote(block.google_event_id, safe="")
     try: google_call(db, "DELETE", path, params={"sendUpdates": "none"})
     except HTTPException as exc:
@@ -436,6 +472,10 @@ def deterministic(context: dict, question: str):
     if context["completed_task_count"] == context["task_count"]: return "All this week’s tasks are marked done. Review Reflect, then choose one realistic next step."
     return f"You planned {context['planned_minutes']} minutes and recorded {context['completed_minutes']} completed minutes this week. Choose one remaining task and give it a realistic time block."
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=1200)
+
 class CoachIn(BaseModel):
     question: str = Field(min_length=1, max_length=600)
     week: str
@@ -443,6 +483,7 @@ class CoachIn(BaseModel):
     use_gemini: bool = False
     include_finance: bool = False
     include_plan_titles: bool = False
+    history: list[ChatTurn] = Field(default_factory=list, max_length=6)
 
 @router.post("/coach/context")
 def preview(data: CoachIn, db: Session = Depends(session)):
@@ -467,17 +508,23 @@ def ask(data: CoachIn, db: Session = Depends(session)):
     usage.request_count += 1
     db.commit()
     model = setting("ANIRO_GEMINI_MODEL") or "gemini-3.8-flash"
+    contents = [{"role": "user" if turn.role == "user" else "model", "parts": [{"text": turn.text}]} for turn in data.history]
+    contents.append({"role": "user", "parts": [{"text": json.dumps({"question": data.question, "context": packet})}]})
     payload = {"systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-               "contents": [{"role": "user", "parts": [{"text": json.dumps({"question": data.question, "context": packet})}]}],
-               "generationConfig": {"maxOutputTokens": 180, "temperature": 0.4}}
+               "contents": contents,
+               "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.4,
+                                    "thinkingConfig": {"thinkingLevel": "low"}}}
     try:
         result = http_json("POST", f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='')}:generateContent", data=payload, key=key)
         answer = " ".join(part.get("text", "") for candidate in result.get("candidates", [])[:1] for part in candidate.get("content", {}).get("parts", []))
         if not answer.strip(): raise RemoteError(502, "Empty AI response")
+        answer = re.sub(r"\*\*(.*?)\*\*", r"\1", answer).strip()
+        answer = re.sub(r"(?<=[.!?]) +(?=[A-Z])", "\n\n", answer)
+        answer = re.sub(r"\n{3,}", "\n\n", answer)
         if any(claim in answer.lower() for claim in ("i am ali abdaal", "i'm ali abdaal", "ali abdaal here", "as ali abdaal")):
             raise RemoteError(502, "Identity claim rejected")
-        words = answer.split()
-        if len(words) > 80: answer = " ".join(words[:80]) + "…"
+        if result.get("candidates", [{}])[0].get("finishReason") == "MAX_TOKENS":
+            raise RemoteError(502, "Incomplete AI response")
         usage.output_tokens += result.get("usageMetadata", {}).get("candidatesTokenCount", 0)
         db.commit()
         return {"answer": answer, "source": "gemini", "context": packet}

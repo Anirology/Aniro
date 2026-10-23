@@ -13,7 +13,11 @@ branch_labels = None
 depends_on = None
 
 def upgrade():
-    Base.metadata.create_all(bind=op.get_bind())
+    # Create only the foundational tables. Later revisions add their own tables.
+    # Vision is included because the current weekly-goal schema references it.
+    for name in ("users", "life_areas", "tracks", "modules", "visions", "goals"):
+        Base.metadata.tables[name].create(op.get_bind())
 
 def downgrade():
-    Base.metadata.drop_all(bind=op.get_bind())
+    for name in ("goals", "visions", "modules", "tracks", "life_areas", "users"):
+        Base.metadata.tables[name].drop(op.get_bind())

@@ -6,8 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from db import SessionLocal
-from models import User, LifeArea, Track, Module, Goal, Task
+from db import SessionLocal, ensure_hosted_schema
+from models import User, LifeArea, Track, Module, Vision, Goal, Task
 
 def session():
     with SessionLocal() as db: yield db
@@ -23,6 +23,7 @@ def user(db: Session):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_hosted_schema()
     yield
 
 app = FastAPI(title="Aniro API", lifespan=lifespan)
@@ -50,8 +51,20 @@ class GoalIn(BaseModel):
     life_area_id: str
     track_id: str | None = None
     module_id: str | None = None
-    parent_goal_id: str | None = None
-    horizon: Literal["10y", "5y", "3y", "2y", "1y", "3mo", "month", "week"]
+    parent_vision_id: str | None = None
+    horizon: Literal["week"] = "week"
+    title: str = Field(min_length=1, max_length=240)
+    description: str = ""
+    status: Literal["active", "completed"] = "active"
+    target_date: str | None = None
+    sort_order: int = 0
+
+class VisionIn(BaseModel):
+    life_area_id: str
+    track_id: str | None = None
+    module_id: str | None = None
+    parent_vision_id: str | None = None
+    horizon: Literal["10y", "5y", "3y", "2y", "1y", "3mo", "month"]
     title: str = Field(min_length=1, max_length=240)
     description: str = ""
     status: Literal["active", "completed"] = "active"
@@ -83,27 +96,36 @@ def validate_track(db, area_id, track_id):
         if t.life_area_id != area_id: raise HTTPException(422, "Track does not belong to life area")
         return t
 
-def validate_goal(db, data: GoalIn, own_id=None):
+def validate_scope(db, data):
     ensure_owner(db, data.life_area_id)
     track = validate_track(db, data.life_area_id, data.track_id)
     if data.module_id:
         m = get(db, Module, data.module_id)
         if not track or m.track_id != track.id: raise HTTPException(422, "Module does not belong to track")
-    if data.parent_goal_id:
-        if data.parent_goal_id == own_id: raise HTTPException(422, "Goal cannot link to itself")
-        parent = get(db, Goal, data.parent_goal_id)
+def validate_vision_link(db, data, own_id=None):
+    if data.parent_vision_id:
+        if data.parent_vision_id == own_id: raise HTTPException(422, "Vision cannot link to itself")
+        parent = get(db, Vision, data.parent_vision_id)
         if parent.user_id != user(db).id: raise HTTPException(404, "Record not found")
+        if parent.life_area_id != data.life_area_id: raise HTTPException(422, "Vision must belong to the same life area")
         order = ["10y", "5y", "3y", "2y", "1y", "3mo", "month", "week"]
         if order.index(parent.horizon) >= order.index(data.horizon): raise HTTPException(422, "Parent must be at a longer horizon")
         seen = {own_id}
-        while parent.parent_goal_id:
-            if parent.parent_goal_id in seen: raise HTTPException(422, "Goal link cycle")
-            seen.add(parent.parent_goal_id)
-            parent = get(db, Goal, parent.parent_goal_id)
-    if data.horizon == "week":
-        try: start = date.fromisoformat(data.target_date or "")
-        except ValueError: raise HTTPException(422, "Weekly goals need a Monday week start date")
-        if start.weekday() != 0: raise HTTPException(422, "Weekly goals need a Monday week start date")
+        while parent.parent_vision_id:
+            if parent.parent_vision_id in seen: raise HTTPException(422, "Vision link cycle")
+            seen.add(parent.parent_vision_id)
+            parent = get(db, Vision, parent.parent_vision_id)
+
+def validate_goal(db, data: GoalIn):
+    validate_scope(db, data)
+    validate_vision_link(db, data)
+    try: start = date.fromisoformat(data.target_date or "")
+    except ValueError: raise HTTPException(422, "Weekly goals need a Monday week start date")
+    if start.weekday() != 0: raise HTTPException(422, "Weekly goals need a Monday week start date")
+
+def validate_vision(db, data: VisionIn, own_id=None):
+    validate_scope(db, data)
+    validate_vision_link(db, data, own_id)
 
 @app.get("/api/health")
 def health(): return {"ok": True}
@@ -115,6 +137,7 @@ def overview(db: Session = Depends(session)):
         "areas": [as_dict(x) for x in db.scalars(select(LifeArea).where(LifeArea.user_id == u.id).order_by(LifeArea.sort_order, LifeArea.name))],
         "tracks": [as_dict(x) for x in db.scalars(select(Track).join(LifeArea).where(LifeArea.user_id == u.id).order_by(Track.sort_order, Track.name))],
         "modules": [as_dict(x) for x in db.scalars(select(Module).join(Track).join(LifeArea).where(LifeArea.user_id == u.id).order_by(Module.sort_order, Module.name))],
+        "visions": [as_dict(x) for x in db.scalars(select(Vision).where(Vision.user_id == u.id).order_by(Vision.sort_order, Vision.title))],
         "goals": [as_dict(x) for x in db.scalars(select(Goal).where(Goal.user_id == u.id).order_by(Goal.sort_order, Goal.title))],
     }
 
@@ -138,7 +161,7 @@ def edit_track(id: str, data: TrackIn, db: Session = Depends(session)):
     obj = get(db, Track, id)
     ensure_owner(db, obj.life_area_id)
     ensure_owner(db, data.life_area_id)
-    if obj.life_area_id != data.life_area_id and (obj.modules or db.scalar(select(Goal.id).where(Goal.track_id == id).limit(1))): raise HTTPException(409, "Move child records first")
+    if obj.life_area_id != data.life_area_id and (obj.modules or db.scalar(select(Goal.id).where(Goal.track_id == id).limit(1)) or db.scalar(select(Vision.id).where(Vision.track_id == id).limit(1))): raise HTTPException(409, "Move child records first")
     for k,v in data.model_dump().items(): setattr(obj,k,v)
     return save(db,obj)
 
@@ -152,26 +175,37 @@ def edit_module(id: str, data: ModuleIn, db: Session = Depends(session)):
     obj = get(db,Module,id)
     ensure_owner(db,get(db,Track,obj.track_id).life_area_id)
     ensure_owner(db,get(db,Track,data.track_id).life_area_id)
-    if obj.track_id != data.track_id and db.scalar(select(Goal.id).where(Goal.module_id == id).limit(1)): raise HTTPException(409,"Move linked goals first")
+    if obj.track_id != data.track_id and (db.scalar(select(Goal.id).where(Goal.module_id == id).limit(1)) or db.scalar(select(Vision.id).where(Vision.module_id == id).limit(1))): raise HTTPException(409,"Move linked outcomes first")
     for k,v in data.model_dump().items(): setattr(obj,k,v)
     return save(db,obj)
 
 @app.post("/api/goals", status_code=201)
 def add_goal(data: GoalIn, db: Session = Depends(session)):
     validate_goal(db,data)
-    if data.horizon == "week" and not data.target_date: raise HTTPException(422,"Weekly goals need a week start date")
     return save(db,Goal(user_id=user(db).id,**data.model_dump()))
 
 @app.put("/api/goals/{id}")
 def edit_goal(id: str, data: GoalIn, db: Session = Depends(session)):
     obj = get(db,Goal,id)
     if obj.user_id != user(db).id: raise HTTPException(404,"Record not found")
-    validate_goal(db,data,id)
-    if data.horizon == "week" and not data.target_date: raise HTTPException(422,"Weekly goals need a week start date")
+    validate_goal(db,data)
     for k,v in data.model_dump().items(): setattr(obj,k,v)
     return save(db,obj)
 
-TABLES = {"areas": LifeArea,"tracks": Track,"modules": Module,"goals": Goal}
+@app.post("/api/visions", status_code=201)
+def add_vision(data: VisionIn, db: Session = Depends(session)):
+    validate_vision(db, data)
+    return save(db, Vision(user_id=user(db).id, **data.model_dump()))
+
+@app.put("/api/visions/{id}")
+def edit_vision(id: str, data: VisionIn, db: Session = Depends(session)):
+    obj = get(db, Vision, id)
+    if obj.user_id != user(db).id: raise HTTPException(404, "Record not found")
+    validate_vision(db, data, id)
+    for k, v in data.model_dump().items(): setattr(obj, k, v)
+    return save(db, obj)
+
+TABLES = {"areas": LifeArea,"tracks": Track,"modules": Module,"visions": Vision,"goals": Goal}
 
 from plan_api import router as plan_router
 app.include_router(plan_router)
@@ -198,16 +232,19 @@ def delete(kind: str,id: str,confirm: bool = Query(False),db: Session = Depends(
     obj=get(db,TABLES[kind],id)
     if kind == "areas":
         ensure_owner(db,id)
-        refs = db.scalar(select(Track.id).where(Track.life_area_id==id).limit(1)) or db.scalar(select(Goal.id).where(Goal.life_area_id==id).limit(1))
+        refs = db.scalar(select(Track.id).where(Track.life_area_id==id).limit(1)) or db.scalar(select(Goal.id).where(Goal.life_area_id==id).limit(1)) or db.scalar(select(Vision.id).where(Vision.life_area_id==id).limit(1))
     elif kind == "tracks":
         ensure_owner(db,obj.life_area_id)
-        refs = db.scalar(select(Module.id).where(Module.track_id==id).limit(1)) or db.scalar(select(Goal.id).where(Goal.track_id==id).limit(1))
+        refs = db.scalar(select(Module.id).where(Module.track_id==id).limit(1)) or db.scalar(select(Goal.id).where(Goal.track_id==id).limit(1)) or db.scalar(select(Vision.id).where(Vision.track_id==id).limit(1))
     elif kind == "modules":
         ensure_owner(db,get(db,Track,obj.track_id).life_area_id)
-        refs = db.scalar(select(Goal.id).where(Goal.module_id==id).limit(1)) or db.scalar(select(Task.id).where(Task.module_id==id).limit(1))
+        refs = db.scalar(select(Goal.id).where(Goal.module_id==id).limit(1)) or db.scalar(select(Vision.id).where(Vision.module_id==id).limit(1)) or db.scalar(select(Task.id).where(Task.module_id==id).limit(1))
+    elif kind == "visions":
+        if obj.user_id != user(db).id: raise HTTPException(404,"Record not found")
+        refs = db.scalar(select(Vision.id).where(Vision.parent_vision_id==id).limit(1)) or db.scalar(select(Goal.id).where(Goal.parent_vision_id==id).limit(1))
     else:
         if obj.user_id != user(db).id: raise HTTPException(404,"Record not found")
-        refs = db.scalar(select(Goal.id).where(Goal.parent_goal_id==id).limit(1)) or db.scalar(select(Task.id).where(Task.goal_id==id).limit(1))
+        refs = db.scalar(select(Task.id).where(Task.goal_id==id).limit(1))
     if refs: raise HTTPException(409,"This item is referenced. Archive it to preserve linked records.")
     db.delete(obj)
     db.commit()

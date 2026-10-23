@@ -15,7 +15,7 @@ function addDays(value:string,days:number){const date=new Date(`${value}T00:00:0
 async function request(path:string,method:string,body?:unknown){const response=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});if(!response.ok){const payload=await response.json().catch(()=>({detail:'Request failed'}));throw new Error(payload.detail||'Request failed')}return response.json()}
 
 export default function CalendarComposer({slot,event,week,timezone,connected,colors,goals,tasks,modules,tracks,onClose,onSaved}:Props){
- const [mode,setMode]=useState<'event'|'task'>(connected?'event':'task')
+ const [mode,setMode]=useState<'event'|'task'>(event?'event':'task')
  const [start,setStart]=useState(event&&!event.all_day?parts(event.start,timezone):slot.start)
  const [end,setEnd]=useState(event&&!event.all_day?parts(event.end,timezone):slot.end)
  const [title,setTitle]=useState(event?.title||'')

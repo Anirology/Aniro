@@ -4,6 +4,7 @@ frontend/*.tsbuildinfo
 backend/.venv/
 backend/aniro.db*
 backend/aniro.*.db
+backend/backups/
 backend/.env
 backend/google_oauth_client.json
 backend/.token_key

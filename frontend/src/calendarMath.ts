@@ -6,3 +6,12 @@ export function calendarBookedMinutes(items:TimedCalendarItem[],weekStart:number
  for(const [nextStart,nextEnd] of intervals){if(nextStart>end){booked+=Math.max(0,end-start);start=nextStart;end=nextEnd}else end=Math.max(end,nextEnd)}
  return Math.round((booked+Math.max(0,end-start))/60000)
 }
+
+export function remainingRoomMinutes(capacityMinutes:number,items:TimedCalendarItem[],weekStart:number,weekEnd:number,now:number){
+ const start=Math.max(weekStart,now)
+ if(start>=weekEnd||weekEnd<=weekStart)return {room:0,remainingCapacity:0,futureBooked:0,overbooked:false}
+ const fraction=(weekEnd-start)/(weekEnd-weekStart)
+ const remainingCapacity=Math.round(Math.max(0,capacityMinutes)*fraction)
+ const futureBooked=calendarBookedMinutes(items,start,weekEnd)
+ return {room:Math.max(0,remainingCapacity-futureBooked),remainingCapacity,futureBooked,overbooked:futureBooked>remainingCapacity}
+}

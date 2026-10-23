@@ -1,11 +1,12 @@
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models import User, LifeArea, Track, Module, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog
+from models import User, LifeArea, Track, Module, Vision, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog
 
 router = APIRouter(prefix="/api")
 Status = Literal["planned", "done", "partial", "missed", "moved"]
@@ -62,7 +63,7 @@ def utc_naive(value: datetime):
     if value.tzinfo is None: raise HTTPException(422, "Time must include a timezone offset")
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
-def hierarchy(db: Session, goal: Goal):
+def hierarchy(db: Session, goal: Goal | Vision):
     area = obj(db, LifeArea, goal.life_area_id)
     track = obj(db, Track, goal.track_id) if goal.track_id else None
     module = obj(db, Module, goal.module_id) if goal.module_id else None
@@ -120,6 +121,16 @@ class ResultIn(BaseModel):
     status: Status
     actual_minutes: int | None = Field(default=None, ge=0, le=10080)
     note: str = Field(default="", max_length=2000)
+
+class QuickTaskIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+
+class ReviewItemIn(BaseModel):
+    block_id: str
+    status: Literal["done", "missed"]
+
+class ReviewIn(BaseModel):
+    items: list[ReviewItemIn] = Field(min_length=1, max_length=100)
 
 def validate_task(db: Session, data: TaskIn):
     week_date(data.week_start)
@@ -183,8 +194,8 @@ def plan(week: str, db: Session = Depends(session)):
     tracks = list(db.scalars(select(Track).where(Track.life_area_id.in_(area_ids)))) if area_ids else []
     track_ids = [t.id for t in tracks]
     modules = list(db.scalars(select(Module).where(Module.track_id.in_(track_ids)))) if track_ids else []
-    all_goals = list(db.scalars(select(Goal).where(Goal.user_id == u.id)))
-    goals = [g for g in all_goals if g.horizon == "week" and g.target_date == week]
+    goals = list(db.scalars(select(Goal).where(Goal.user_id == u.id, Goal.target_date == week)))
+    visions = list(db.scalars(select(Vision).where(Vision.user_id == u.id, Vision.archived_at.is_(None))))
     tasks = list(db.scalars(select(Task).where(Task.user_id == u.id, Task.week_start == week).order_by(Task.sort_order, Task.title)))
     task_ids = [t.id for t in tasks]
     blocks = list(db.scalars(select(CalendarBlock).where(CalendarBlock.task_id.in_(task_ids)).order_by(CalendarBlock.start_at))) if task_ids else []
@@ -194,7 +205,7 @@ def plan(week: str, db: Session = Depends(session)):
         "timezone": u.timezone,
         "areas": [encoded(x) for x in areas], "tracks": [encoded(x) for x in tracks], "modules": [encoded(x) for x in modules],
         "goals": [{**encoded(g), **hierarchy(db, g)} for g in goals],
-        "long_goals": [{**encoded(g), **hierarchy(db, g)} for g in all_goals if g.horizon != "week" and not g.archived_at],
+        "visions": [{**encoded(v), **hierarchy(db, v)} for v in visions],
         "tasks": [encoded(x) for x in tasks], "blocks": [encoded(x) for x in blocks], "logs": [encoded(x) for x in logs],
         "settings": encoded(settings) if settings else {"capacity_minutes": None, "seasonal_priority": None},
         "totals": completion_totals(db, u.id, week),
@@ -225,6 +236,34 @@ def add_task(data: TaskIn, db: Session = Depends(session)):
     validate_task(db, data)
     return commit(db, Task(user_id=current_user(db).id, **task_values(data)))
 
+@router.post("/tasks/quick", status_code=201)
+def quick_task(data: QuickTaskIn, db: Session = Depends(session)):
+    user = current_user(db)
+    if not data.title.strip(): raise HTTPException(422, "Enter a task")
+    local_day = datetime.now(ZoneInfo(user.timezone)).date()
+    week = (local_day - timedelta(days=local_day.weekday())).isoformat()
+    return commit(db, Task(user_id=user.id, week_start=week, title=data.title.strip()))
+
+@router.post("/tasks/{id}/carryover", status_code=201)
+def carryover_task(id: str, week: str, db: Session = Depends(session)):
+    target = week_date(week)
+    source = owner_task(db, id)
+    if source.archived_at or source.status in ("done", "moved"):
+        raise HTTPException(409, "Only unfinished active tasks can carry over")
+    if target <= week_date(source.week_start):
+        raise HTTPException(422, "Choose a later week")
+    copied = Task(user_id=source.user_id, week_start=week, title=source.title,
+                  module_id=source.module_id, estimate_minutes=source.estimate_minutes,
+                  sort_order=source.sort_order)
+    db.add(copied)
+    source.status = "moved"
+    for block in db.scalars(select(CalendarBlock).where(CalendarBlock.task_id == source.id, CalendarBlock.archived_at.is_(None))):
+        if block.status in ("planned", "partial"):
+            block.status = "moved"
+    db.commit()
+    db.refresh(copied)
+    return {"task": encoded(copied), "source": encoded(source)}
+
 @router.put("/tasks/{id}")
 def edit_task(id: str, data: TaskIn, db: Session = Depends(session)):
     task = owner_task(db, id)
@@ -235,7 +274,7 @@ def edit_task(id: str, data: TaskIn, db: Session = Depends(session)):
     for key, value in task_values(data).items(): setattr(task, key, value)
     if title_changed:
         for block in db.scalars(select(CalendarBlock).where(CalendarBlock.task_id == id, CalendarBlock.google_event_id.is_not(None))):
-            block.sync_state = "pending_update"
+            if block.sync_state != "imported": block.sync_state = "pending_update"
     return commit(db, task)
 
 @router.post("/tasks/{id}/archive")
@@ -302,6 +341,8 @@ def edit_block(id: str, data: BlockIn, db: Session = Depends(session)):
         raise HTTPException(409, "Completed block cannot move to another task")
     start, end = validate_block(db, data, id)
     changed = (block.task_id, block.start_at, block.end_at) != (data.task_id, start, end)
+    if changed and block.sync_state == "imported":
+        raise HTTPException(409, "Edit the original Google event in Google Calendar; this block is linked for tracking")
     block.task_id, block.start_at, block.end_at = data.task_id, start, end
     if changed and block.google_event_id: block.sync_state = "pending_update"
     return commit(db, block)
@@ -322,6 +363,30 @@ def block_result(id: str, data: ResultIn, db: Session = Depends(session)):
     task.status = block_task_status(db, task)
     db.commit()
     return {"block": encoded(block), "task": encoded(task), "totals": completion_totals(db, task.user_id, task.week_start)}
+
+@router.post("/calendar-blocks/review")
+def review_blocks(data: ReviewIn, db: Session = Depends(session)):
+    ids = [item.block_id for item in data.items]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, "Review each block once")
+    selected = [(owner_block(db, item.block_id), item.status) for item in data.items]
+    if any(block.archived_at or owner_task(db, block.task_id).archived_at for block, _ in selected):
+        raise HTTPException(422, "Restore archived work before reviewing")
+    touched = set()
+    for block, status in selected:
+        block.status = status
+        task = owner_task(db, block.task_id)
+        touched.add(task.id)
+        for direct in db.scalars(select(CompletionLog).where(CompletionLog.task_id == task.id, CompletionLog.calendar_block_id.is_(None))):
+            db.delete(direct)
+        minutes = round((block.end_at - block.start_at).total_seconds() / 60) if status == "done" else 0
+        replace_log(db, task.id, block.id, status, minutes, "")
+    db.flush()
+    for task_id in touched:
+        task = owner_task(db, task_id)
+        task.status = block_task_status(db, task)
+    db.commit()
+    return {"reviewed": len(selected)}
 
 @router.post("/calendar-blocks/{id}/archive")
 def archive_block(id: str, restore: bool = False, db: Session = Depends(session)):

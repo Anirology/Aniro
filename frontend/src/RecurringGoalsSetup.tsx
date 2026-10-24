@@ -1,0 +1,24 @@
+import {useState} from 'react'
+import {ArrowClockwise,Check,X} from '@phosphor-icons/react'
+import useSmoothDismiss from './useSmoothDismiss'
+
+type Area={id:string;name:string;archived_at:string|null}
+type Track={id:string;life_area_id:string;name:string;archived_at:string|null}
+type Module={id:string;track_id:string;name:string;status?:string;archived_at:string|null}
+type Template={id:string;module_id:string;archived_at:string|null}
+type Props={week:string;areas:Area[];tracks:Track[];modules:Module[];templates:Template[];onClose:()=>void;onSaved:()=>Promise<void>}
+
+export default function RecurringGoalsSetup({week,areas,tracks,modules,templates,onClose,onSaved}:Props){
+ const {closing,dismiss}=useSmoothDismiss(onClose)
+ const education=areas.filter(area=>!area.archived_at&&/education|study|learning/i.test(area.name))
+ const matchingTracks=tracks.filter(track=>!track.archived_at&&education.some(area=>area.id===track.life_area_id))
+ const initial=matchingTracks.find(track=>/\b(bit|vit)\b|bachelor of information technology/i.test(track.name))?.id||matchingTracks[0]?.id||''
+ const [trackId,setTrackId]=useState(initial)
+ const current=modules.filter(module=>module.track_id===trackId&&!module.archived_at&&module.status!=='completed')
+ const [selected,setSelected]=useState<string[]>(()=>modules.filter(module=>module.track_id===initial&&!module.archived_at&&module.status!=='completed'&&!templates.some(template=>template.module_id===module.id&&!template.archived_at)).map(module=>module.id))
+ const [busy,setBusy]=useState(false),[error,setError]=useState('')
+ const activeCount=current.filter(module=>templates.some(template=>template.module_id===module.id&&!template.archived_at)).length
+ function chooseTrack(id:string){setTrackId(id);setSelected(modules.filter(module=>module.track_id===id&&!module.archived_at&&module.status!=='completed'&&!templates.some(template=>template.module_id===module.id&&!template.archived_at)).map(module=>module.id))}
+ async function save(){if(!selected.length)return;setBusy(true);setError('');try{const response=await fetch('/api/plan/recurring-goals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({week_start:week,module_ids:selected})});if(!response.ok){const payload=await response.json().catch(()=>({detail:'Could not save recurring goals'}));throw new Error(payload.detail)}await onSaved();dismiss()}catch(caught){setError((caught as Error).message)}finally{setBusy(false)}}
+ return <div className={`backdrop smoothBackdrop ${closing?'isClosing':''}`} role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)dismiss()}} onKeyDown={event=>{if(event.key==='Escape')dismiss()}}><section className="dialog recurringSetup" role="dialog" aria-modal="true" aria-label="Set up weekly module goals"><div className="dialogHead"><div><small>SET UP ONCE</small><h2>Weekly module goals</h2></div><button type="button" aria-label="Close" onClick={dismiss}><X/></button></div><p className="recurringIntro">Your selected modules will get a fresh learning log goal every Monday. Add tasks only when you have a specific next step.</p>{matchingTracks.length===0?<p className="formError">Add a track and modules under Education in Clarity first.</p>:<><div className="recurringTrack"><span>COURSE / TRACK</span><select value={trackId} onChange={event=>chooseTrack(event.target.value)}>{matchingTracks.map(track=><option key={track.id} value={track.id}>{track.name}</option>)}</select></div>{activeCount>0&&<p className="recurringExisting"><Check size={15}/> {activeCount} {activeCount===1?'module already repeats':'modules already repeat'} each week</p>}<div className="recurringList">{current.map(module=>{const active=templates.some(template=>template.module_id===module.id&&!template.archived_at);return <label key={module.id} className={active?'isActive':''}><input type="checkbox" checked={active||selected.includes(module.id)} disabled={active} onChange={event=>setSelected(items=>event.target.checked?[...items,module.id]:items.filter(id=>id!==module.id))}/><span><strong>{module.name}</strong><small>{active?'Already repeating':`Finish this week’s ${module.name} learning log`}</small></span>{active&&<Check size={16}/>}</label>})}{current.length===0&&<p>No active modules in this track yet.</p>}</div><p className="recurringNote"><ArrowClockwise size={16}/> Each week has its own done state. You can stop repeating any module later.</p></>}{error&&<p className="formError" role="alert">{error}</p>}<div className="dialogFoot"><button type="button" className="subtle" onClick={dismiss}>Cancel</button><button type="button" className="primary" disabled={busy||selected.length===0} onClick={()=>void save()}>{busy?'Saving…':`Repeat ${selected.length} ${selected.length===1?'module':'modules'} weekly`}</button></div></section></div>
+}

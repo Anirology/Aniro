@@ -65,7 +65,7 @@ class Vision(Base):
 
 class Goal(Base):
     __tablename__ = "goals"
-    __table_args__ = (CheckConstraint("horizon = 'week'", name="goal_horizon"),)
+    __table_args__ = (CheckConstraint("horizon = 'week'", name="goal_horizon"), UniqueConstraint("recurring_template_id", "target_date", name="recurring_goal_template_week"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
@@ -78,6 +78,16 @@ class Goal(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     target_date: Mapped[str | None] = mapped_column(String(10))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recurring_template_id: Mapped[str | None] = mapped_column(ForeignKey("recurring_weekly_goals.id"), index=True)
+
+class RecurringWeeklyGoal(Base):
+    __tablename__ = "recurring_weekly_goals"
+    __table_args__ = (UniqueConstraint("user_id", "module_id", name="recurring_goal_user_module"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    module_id: Mapped[str] = mapped_column(ForeignKey("modules.id"), index=True)
+    starts_on: Mapped[str] = mapped_column(String(10))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class WeeklyPlan(Base):

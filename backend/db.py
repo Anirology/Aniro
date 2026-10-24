@@ -47,11 +47,27 @@ def ensure_hosted_schema():
         tables = set(inspect(connection).get_table_names())
         if "alembic_version" in tables:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            if revision != "0008_backup_snapshots":
+            if revision == "0008_backup_snapshots":
+                connection.execute(text("""CREATE TABLE recurring_weekly_goals (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_id VARCHAR(36) NOT NULL REFERENCES users(id),
+                    module_id VARCHAR(36) NOT NULL REFERENCES modules(id),
+                    starts_on VARCHAR(10) NOT NULL,
+                    archived_at TIMESTAMPTZ,
+                    CONSTRAINT recurring_goal_user_module UNIQUE (user_id, module_id)
+                )"""))
+                connection.execute(text("CREATE INDEX ix_recurring_weekly_goals_user_id ON recurring_weekly_goals (user_id)"))
+                connection.execute(text("CREATE INDEX ix_recurring_weekly_goals_module_id ON recurring_weekly_goals (module_id)"))
+                connection.execute(text("ALTER TABLE goals ADD COLUMN recurring_template_id VARCHAR(36) REFERENCES recurring_weekly_goals(id)"))
+                connection.execute(text("CREATE INDEX ix_goals_recurring_template_id ON goals (recurring_template_id)"))
+                connection.execute(text("CREATE UNIQUE INDEX recurring_goal_template_week ON goals (recurring_template_id, target_date)"))
+                connection.execute(text("UPDATE alembic_version SET version_num = '0009_recurring_weekly_goals'"))
+                return
+            if revision != "0009_recurring_weekly_goals":
                 raise RuntimeError(f"Unsupported hosted schema revision: {revision}")
             return
         if tables.intersection(Base.metadata.tables):
             raise RuntimeError("Hosted database already has Aniro tables but no migration version")
         Base.metadata.create_all(connection)
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0008_backup_snapshots')"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0009_recurring_weekly_goals')"))

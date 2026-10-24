@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, delete, insert, update, DateTime
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models import (User, LifeArea, Track, Module, Vision, Goal, WeeklyPlan, Task, CalendarBlock,
+from models import (User, LifeArea, Track, Module, Vision, Goal, RecurringWeeklyGoal, WeeklyPlan, Task, CalendarBlock,
                     CompletionLog, Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings,
                     BudgetMonth, ExpenseCategory, Expense, GoogleIntegration, CoachUsage, BackupSnapshot)
 
@@ -501,27 +501,29 @@ def delete_expense(id: str, confirm: bool = Query(False), db: Session = Depends(
     db.commit()
     return {"deleted": True}
 
-EXPORT_TABLES = (LifeArea, Track, Module, Vision, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog,
+EXPORT_TABLES = (LifeArea, Track, Module, Vision, RecurringWeeklyGoal, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog,
                  Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings, BudgetMonth, ExpenseCategory, Expense)
+LEGACY_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls is not RecurringWeeklyGoal}
 
 def validate_backup(payload: dict):
     if payload.get("format") != "aniro-json-v1" or not isinstance(payload.get("user"), dict):
         raise HTTPException(422, "Choose an Aniro JSON backup")
     tables = payload.get("tables")
-    if not isinstance(tables, dict) or set(tables) != {cls.__tablename__ for cls in EXPORT_TABLES}:
+    if not isinstance(tables, dict) or set(tables) not in (LEGACY_EXPORT_NAMES, {cls.__tablename__ for cls in EXPORT_TABLES}):
         raise HTTPException(422, "Backup tables do not match this version of Aniro")
     source_user = payload["user"].get("id")
     if not isinstance(source_user, str) or not source_user:
         raise HTTPException(422, "Backup user is missing")
     total = 0
     for cls in EXPORT_TABLES:
-        rows = tables[cls.__tablename__]
+        rows = tables.get(cls.__tablename__, [])
         if not isinstance(rows, list) or len(rows) > 100_000:
             raise HTTPException(422, "Backup table is invalid or too large")
         columns = {column.name for column in cls.__table__.columns}
         ids = set()
         for row in rows:
-            if not isinstance(row, dict) or set(row) != columns or not isinstance(row.get("id", row.get("user_id")), str):
+            legacy_goal = cls is Goal and set(row) == columns - {"recurring_template_id"} if isinstance(row, dict) else False
+            if not isinstance(row, dict) or (set(row) != columns and not legacy_goal) or not isinstance(row.get("id", row.get("user_id")), str):
                 raise HTTPException(422, f"Invalid {cls.__tablename__} record")
             if "user_id" in row and row["user_id"] != source_user:
                 raise HTTPException(422, "Backup includes records from another user")
@@ -569,8 +571,9 @@ def restore_backup(payload: dict, confirm: bool = Query(False), db: Session = De
         db.execute(delete(CoachUsage))
         pending_vision_links = []
         for cls in EXPORT_TABLES:
-            for raw in payload["tables"][cls.__tablename__]:
+            for raw in payload["tables"].get(cls.__tablename__, []):
                 row = dict(raw)
+                if cls is Goal: row.setdefault("recurring_template_id", None)
                 if row.get("user_id") == source_user:
                     row["user_id"] = current_user.id
                 for column in cls.__table__.columns:
@@ -612,7 +615,8 @@ def export_json(db: Session = Depends(session)):
     habit_ids = select(Habit.id).where(Habit.user_id == u.id)
     budget_ids = select(BudgetMonth.id).where(BudgetMonth.user_id == u.id)
     filters = {LifeArea: LifeArea.user_id == u.id, Track: Track.life_area_id.in_(area_ids),
-               Module: Module.track_id.in_(track_ids), Vision: Vision.user_id == u.id, Goal: Goal.user_id == u.id,
+               Module: Module.track_id.in_(track_ids), Vision: Vision.user_id == u.id,
+               RecurringWeeklyGoal: RecurringWeeklyGoal.user_id == u.id, Goal: Goal.user_id == u.id,
                WeeklyPlan: WeeklyPlan.user_id == u.id, Task: Task.user_id == u.id,
                CalendarBlock: CalendarBlock.task_id.in_(task_ids), CompletionLog: CompletionLog.task_id.in_(task_ids),
                Habit: Habit.user_id == u.id, HabitCheckin: HabitCheckin.habit_id.in_(habit_ids),

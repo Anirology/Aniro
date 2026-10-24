@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from db import Base
-from models import User, LifeArea, Vision, BudgetMonth, ExpenseCategory, Expense
+from models import User, LifeArea, Track, Module, Vision, Goal, RecurringWeeklyGoal, BudgetMonth, ExpenseCategory, Expense
 from stage3_api import export_json, preview_backup, restore_backup
 
 
@@ -67,6 +67,34 @@ class RestoreTests(unittest.TestCase):
             restore_backup(exported, True, self.db)
         self.assertEqual(self.db.get(LifeArea, self.area.id).name, "Education")
         self.assertFalse((self.path.parent / "backups").exists())
+
+    def test_recurring_goals_survive_export_and_legacy_backup_still_restores(self):
+        track = Track(life_area_id=self.area.id, name="BIT")
+        self.db.add(track)
+        self.db.flush()
+        module = Module(track_id=track.id, name="Programming")
+        self.db.add(module)
+        self.db.flush()
+        template = RecurringWeeklyGoal(user_id=self.user.id, module_id=module.id, starts_on="2026-10-19")
+        self.db.add(template)
+        self.db.flush()
+        goal = Goal(user_id=self.user.id, life_area_id=self.area.id, track_id=track.id,
+                    module_id=module.id, recurring_template_id=template.id,
+                    target_date="2026-10-19", title="Learning log")
+        self.db.add(goal)
+        self.db.commit()
+        exported = json.loads(export_json(self.db).body)
+        self.assertEqual(len(exported["tables"]["recurring_weekly_goals"]), 1)
+        restore_backup(exported, True, self.db)
+        self.db.expire_all()
+        self.assertEqual(self.db.get(Goal, goal.id).recurring_template_id, template.id)
+        legacy = json.loads(json.dumps(exported))
+        del legacy["tables"]["recurring_weekly_goals"]
+        for row in legacy["tables"]["goals"]: del row["recurring_template_id"]
+        self.assertGreater(preview_backup(legacy)["records"], 0)
+        restore_backup(legacy, True, self.db)
+        self.db.expire_all()
+        self.assertIsNone(self.db.get(Goal, goal.id).recurring_template_id)
 
 
 if __name__ == "__main__":

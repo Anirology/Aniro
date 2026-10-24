@@ -189,6 +189,8 @@ def edit_goal(id: str, data: GoalIn, db: Session = Depends(session)):
     obj = get(db,Goal,id)
     if obj.user_id != user(db).id: raise HTTPException(404,"Record not found")
     validate_goal(db,data)
+    if obj.recurring_template_id and (data.life_area_id != obj.life_area_id or data.track_id != obj.track_id or data.module_id != obj.module_id or data.target_date != obj.target_date):
+        raise HTTPException(422,"A recurring module goal must stay with its module and week")
     for k,v in data.model_dump().items(): setattr(obj,k,v)
     return save(db,obj)
 

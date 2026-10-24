@@ -4,9 +4,10 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from db import SessionLocal
-from models import User, LifeArea, Track, Module, Vision, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog
+from models import User, LifeArea, Track, Module, Vision, Goal, RecurringWeeklyGoal, WeeklyPlan, Task, CalendarBlock, CompletionLog
 
 router = APIRouter(prefix="/api")
 Status = Literal["planned", "done", "partial", "missed", "moved"]
@@ -132,6 +133,93 @@ class ReviewItemIn(BaseModel):
 class ReviewIn(BaseModel):
     items: list[ReviewItemIn] = Field(min_length=1, max_length=100)
 
+class RecurringGoalsIn(BaseModel):
+    week_start: str
+    module_ids: list[str] = Field(min_length=1, max_length=30)
+
+class GoalCompletionIn(BaseModel):
+    completed: bool
+
+def recurring_goal_copy(module_name: str):
+    return f"Finish this week’s {module_name} learning log", "Capture what you covered this week. Add a task only when there’s a specific next step."
+
+def materialize_recurring_goals(db: Session, user_id: str, week: str):
+    templates = list(db.scalars(select(RecurringWeeklyGoal).where(
+        RecurringWeeklyGoal.user_id == user_id,
+        RecurringWeeklyGoal.archived_at.is_(None),
+        RecurringWeeklyGoal.starts_on <= week,
+    )))
+    changed = False
+    for template in templates:
+        module = db.get(Module, template.module_id)
+        if not module or module.archived_at or module.status != "active": continue
+        track = db.get(Track, module.track_id)
+        if not track or track.archived_at: continue
+        area = db.get(LifeArea, track.life_area_id)
+        if not area or area.archived_at or area.user_id != user_id: continue
+        existing = db.scalar(select(Goal).where(Goal.recurring_template_id == template.id, Goal.target_date == week))
+        if existing: continue
+        # An existing module goal becomes this week's instance, preserving its tasks and wording.
+        existing = db.scalar(select(Goal).where(
+            Goal.user_id == user_id, Goal.module_id == module.id,
+            Goal.target_date == week, Goal.recurring_template_id.is_(None),
+            Goal.archived_at.is_(None),
+        ).order_by(Goal.sort_order, Goal.id))
+        if existing:
+            existing.recurring_template_id = template.id
+            changed = True
+            continue
+        title, description = recurring_goal_copy(module.name)
+        try:
+            with db.begin_nested():
+                db.add(Goal(user_id=user_id, life_area_id=area.id, track_id=track.id,
+                            module_id=module.id, recurring_template_id=template.id,
+                            target_date=week, title=title, description=description))
+                db.flush()
+            changed = True
+        except IntegrityError:
+            # Another request generated the same week concurrently.
+            pass
+    if changed: db.commit()
+
+@router.post("/plan/recurring-goals", status_code=201)
+def add_recurring_goals(data: RecurringGoalsIn, db: Session = Depends(session)):
+    week_date(data.week_start)
+    user = current_user(db)
+    module_ids = list(dict.fromkeys(data.module_ids))
+    for module_id in module_ids:
+        module = db.get(Module, module_id)
+        if not module: raise HTTPException(422, "Choose an active module")
+        track = db.get(Track, module.track_id)
+        area = db.get(LifeArea, track.life_area_id) if track else None
+        if not area or area.user_id != user.id or area.archived_at or track.archived_at or module.archived_at or module.status != "active":
+            raise HTTPException(422, "Choose an active module")
+    for module_id in module_ids:
+        template = db.scalar(select(RecurringWeeklyGoal).where(RecurringWeeklyGoal.user_id == user.id, RecurringWeeklyGoal.module_id == module_id))
+        if template:
+            template.archived_at = None
+            template.starts_on = min(template.starts_on, data.week_start)
+        else:
+            db.add(RecurringWeeklyGoal(user_id=user.id, module_id=module_id, starts_on=data.week_start))
+    db.commit()
+    materialize_recurring_goals(db, user.id, data.week_start)
+    return {"module_ids": module_ids}
+
+@router.post("/plan/recurring-goals/{template_id}/stop")
+def stop_recurring_goal(template_id: str, db: Session = Depends(session)):
+    template = db.get(RecurringWeeklyGoal, template_id)
+    if not template or template.user_id != current_user(db).id: raise HTTPException(404, "Recurring goal not found")
+    template.archived_at = datetime.now(timezone.utc)
+    return commit(db, template)
+
+@router.post("/plan/goals/{goal_id}/completion")
+def complete_weekly_goal(goal_id: str, data: GoalCompletionIn, db: Session = Depends(session)):
+    goal = db.get(Goal, goal_id)
+    if not goal or goal.user_id != current_user(db).id or goal.archived_at or goal.horizon != "week":
+        raise HTTPException(404, "Weekly goal not found")
+    goal.status = "completed" if data.completed else "active"
+    return commit(db, goal)
+
 def validate_task(db: Session, data: TaskIn):
     week_date(data.week_start)
     u = current_user(db)
@@ -189,11 +277,13 @@ def block_task_status(db: Session, task: Task):
 def plan(week: str, db: Session = Depends(session)):
     week_date(week)
     u = current_user(db)
+    materialize_recurring_goals(db, u.id, week)
     areas = list(db.scalars(select(LifeArea).where(LifeArea.user_id == u.id).order_by(LifeArea.sort_order, LifeArea.name)))
     area_ids = [a.id for a in areas]
     tracks = list(db.scalars(select(Track).where(Track.life_area_id.in_(area_ids)))) if area_ids else []
     track_ids = [t.id for t in tracks]
     modules = list(db.scalars(select(Module).where(Module.track_id.in_(track_ids)))) if track_ids else []
+    recurring_templates = list(db.scalars(select(RecurringWeeklyGoal).where(RecurringWeeklyGoal.user_id == u.id)))
     goals = list(db.scalars(select(Goal).where(Goal.user_id == u.id, Goal.target_date == week)))
     visions = list(db.scalars(select(Vision).where(Vision.user_id == u.id, Vision.archived_at.is_(None))))
     tasks = list(db.scalars(select(Task).where(Task.user_id == u.id, Task.week_start == week).order_by(Task.sort_order, Task.title)))
@@ -204,6 +294,7 @@ def plan(week: str, db: Session = Depends(session)):
     return {
         "timezone": u.timezone,
         "areas": [encoded(x) for x in areas], "tracks": [encoded(x) for x in tracks], "modules": [encoded(x) for x in modules],
+        "recurring_templates": [encoded(x) for x in recurring_templates],
         "goals": [{**encoded(g), **hierarchy(db, g)} for g in goals],
         "visions": [{**encoded(v), **hierarchy(db, v)} for v in visions],
         "tasks": [encoded(x) for x in tasks], "blocks": [encoded(x) for x in blocks], "logs": [encoded(x) for x in logs],

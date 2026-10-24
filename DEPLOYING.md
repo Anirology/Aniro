@@ -34,3 +34,19 @@ deployment.
 Use a domain already owned by the Vercel team, or the project's free
 `*.vercel.app` production address. Buying a custom domain is a separate
 purchase.
+
+## Current hosted setup
+
+- Private app: `https://aniro-topaz.vercel.app/` (Vercel Authentication, all deployments).
+- Public app information and privacy policy: `https://aniro-info.vercel.app/`
+  and `https://aniro-info.vercel.app/privacy.html`. The separate `aniro-info`
+  Vercel project uses this repository's `public-info` directory.
+- Google OAuth production callback:
+  `https://aniro-topaz.vercel.app/api/integrations/google/callback`.
+- Google OAuth uses the `aniro-512005` Google Cloud project. The public info
+  URLs and both Vercel domains are registered in its Branding settings.
+- The hosted database started empty; local SQLite records were not transferred.
+
+Google's OAuth app is published as External / In production. Google may still
+show an unverified-app warning until its branding and sensitive-scope review
+is approved. The dashboard itself remains restricted to the Vercel team.

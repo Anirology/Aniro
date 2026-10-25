@@ -312,12 +312,12 @@ def set_result(db: Session, item: FocusSession, data: RecordIn | CorrectIn):
         log = CompletionLog(task_id=task.id, focus_session_id=item.id)
         db.add(log)
     log.completed_minutes = data.recorded_minutes
-    log.result = "partial" if data.status == "working" else data.status
+    log.result = data.status
     log.note = data.note.strip()
     if data.status == "done":
         task.status = "done"
-    elif task.status != "done":
-        task.status = "partial" if data.recorded_minutes or data.status == "partial" else task.status
+    elif data.status == "partial" and task.status != "done":
+        task.status = "partial"
 
 
 @router.post("/record")
@@ -362,9 +362,9 @@ def correct(id: str, data: CorrectIn, db: Session = Depends(session)):
         raise HTTPException(422, "Correct this attempt on its original task")
     previous = item.result_status
     set_result(db, item, data)
-    if item.task_id and previous == "done" and data.status != "done":
+    if item.task_id and previous in ("done", "partial") and data.status != previous:
         task = db.get(Task, item.task_id)
         other = list(db.scalars(select(CompletionLog).where(CompletionLog.task_id == item.task_id, CompletionLog.focus_session_id != item.id)))
-        task.status = "done" if any(log.result == "done" for log in other) else "partial" if any(log.completed_minutes for log in other) or data.recorded_minutes else "planned"
+        task.status = "done" if any(log.result == "done" for log in other) else "partial" if data.status == "partial" or any(log.result == "partial" for log in other) else "planned"
     db.commit()
     return {"session": encoded(item)}

@@ -48,7 +48,7 @@ class FocusTests(unittest.TestCase):
         summary = action(ActionIn(version=resumed["version"], action="end"), self.db)["session"]
         self.assertEqual(self.db.get(Task, self.task.id).status, "planned")
         record(RecordIn(version=summary["version"], recorded_minutes=12, status="working", note="Revised two topics"), self.db)
-        self.assertEqual(self.db.get(Task, self.task.id).status, "partial")
+        self.assertEqual(self.db.get(Task, self.task.id).status, "planned")
         self.assertEqual(plan("2026-10-26", self.db)["totals"]["completed_minutes"], 12)
         self.assertEqual(reflect_summary(self.db, "2026-10-26")["totals"]["completed_minutes"], 12)
         task_result(self.task.id, ResultIn(status="done"), self.db)
@@ -85,6 +85,9 @@ class FocusTests(unittest.TestCase):
         self.assertEqual(logs[0].completed_minutes, 15)
         self.assertEqual(self.db.get(Task, self.task.id).status, "partial")
         self.assertEqual(len(history(self.db)), 1)
+        correct(first["id"], CorrectIn(recorded_minutes=15, status="working", note="Continuing"), self.db)
+        self.assertEqual(self.db.get(Task, self.task.id).status, "planned")
+        self.assertEqual(plan("2026-10-26", self.db)["totals"]["completed_minutes"], 15)
 
     def test_unlinked_record_is_visible_in_reflect(self):
         first = start(StartIn(starter=True), self.db)["session"]

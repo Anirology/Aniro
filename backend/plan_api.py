@@ -85,7 +85,7 @@ def completion_totals(db: Session, user_id: str, week_start: str):
     logs = list(db.scalars(select(CompletionLog).where(CompletionLog.task_id.in_(task_ids))))
     return {
         "planned_minutes": sum(round((b.end_at - b.start_at).total_seconds() / 60) for b in blocks),
-        "completed_minutes": sum(log.completed_minutes for log in logs if log.result in ("done", "partial")),
+        "completed_minutes": sum(log.completed_minutes for log in logs if log.result in ("done", "partial", "working")),
         "completed_tasks": sum(task.status == "done" for task in tasks),
     }
 

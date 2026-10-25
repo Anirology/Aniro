@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from uuid import uuid4
-from sqlalchemy import String, ForeignKey, Integer, DateTime, Text, CheckConstraint, UniqueConstraint
+from sqlalchemy import String, ForeignKey, Integer, DateTime, Text, CheckConstraint, UniqueConstraint, Boolean, Index, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db import Base
 
@@ -131,10 +131,49 @@ class CompletionLog(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
     calendar_block_id: Mapped[str | None] = mapped_column(ForeignKey("calendar_blocks.id"), index=True)
+    focus_session_id: Mapped[str | None] = mapped_column(ForeignKey("focus_sessions.id"), unique=True)
     completed_minutes: Mapped[int] = mapped_column(Integer, default=0)
     result: Mapped[str] = mapped_column(String(20))
     note: Mapped[str] = mapped_column(Text, default="")
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+class FocusPreferences(Base):
+    __tablename__ = "focus_preferences"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    focus_minutes: Mapped[int] = mapped_column(Integer, default=25)
+    short_break_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    long_break_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    long_break_every: Mapped[int] = mapped_column(Integer, default=4)
+    sound: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_transitions: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class FocusSession(Base):
+    __tablename__ = "focus_sessions"
+    __table_args__ = (Index("focus_one_active_user", "user_id", unique=True, postgresql_where=text("ended_at IS NULL"), sqlite_where=text("ended_at IS NULL")),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"), index=True)
+    phase: Mapped[str] = mapped_column(String(24), default="focus")
+    running: Mapped[bool] = mapped_column(Boolean, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    phase_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    remaining_seconds: Mapped[int] = mapped_column(Integer, default=1500)
+    accrued_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    gap_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    focus_intervals: Mapped[int] = mapped_column(Integer, default=0)
+    next_action: Mapped[str] = mapped_column(String(500), default="")
+    return_instruction: Mapped[str] = mapped_column(String(500), default="")
+    return_phase: Mapped[str] = mapped_column(String(24), default="focus")
+    return_seconds: Mapped[int] = mapped_column(Integer, default=1500)
+    distraction_note: Mapped[str] = mapped_column(String(1000), default="")
+    learning_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    difficulty: Mapped[bool] = mapped_column(Boolean, default=False)
+    recorded_minutes: Mapped[int | None] = mapped_column(Integer)
+    result_status: Mapped[str | None] = mapped_column(String(20))
+    result_note: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class Habit(Base):
     __tablename__ = "habits"

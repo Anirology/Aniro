@@ -62,12 +62,19 @@ def ensure_hosted_schema():
                 connection.execute(text("CREATE INDEX ix_goals_recurring_template_id ON goals (recurring_template_id)"))
                 connection.execute(text("CREATE UNIQUE INDEX recurring_goal_template_week ON goals (recurring_template_id, target_date)"))
                 connection.execute(text("UPDATE alembic_version SET version_num = '0009_recurring_weekly_goals'"))
+                revision = "0009_recurring_weekly_goals"
+            if revision == "0009_recurring_weekly_goals":
+                Base.metadata.tables["focus_preferences"].create(connection, checkfirst=True)
+                Base.metadata.tables["focus_sessions"].create(connection, checkfirst=True)
+                connection.execute(text("ALTER TABLE completion_logs ADD COLUMN focus_session_id VARCHAR(36) REFERENCES focus_sessions(id)"))
+                connection.execute(text("CREATE UNIQUE INDEX ix_completion_logs_focus_session_id ON completion_logs (focus_session_id)"))
+                connection.execute(text("UPDATE alembic_version SET version_num = '0010_focus_sessions'"))
                 return
-            if revision != "0009_recurring_weekly_goals":
+            if revision != "0010_focus_sessions":
                 raise RuntimeError(f"Unsupported hosted schema revision: {revision}")
             return
         if tables.intersection(Base.metadata.tables):
             raise RuntimeError("Hosted database already has Aniro tables but no migration version")
         Base.metadata.create_all(connection)
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0009_recurring_weekly_goals')"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0010_focus_sessions')"))

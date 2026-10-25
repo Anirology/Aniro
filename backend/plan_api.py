@@ -259,19 +259,25 @@ def validate_block(db: Session, data: BlockIn, own_id: str | None = None):
     return start, end
 
 def replace_log(db: Session, task_id: str, block_id: str | None, status: Status, minutes: int, note: str):
-    old = list(db.scalars(select(CompletionLog).where(CompletionLog.task_id == task_id, CompletionLog.calendar_block_id == block_id) if block_id else select(CompletionLog).where(CompletionLog.task_id == task_id, CompletionLog.calendar_block_id.is_(None))))
+    old = list(db.scalars(select(CompletionLog).where(CompletionLog.task_id == task_id, CompletionLog.calendar_block_id == block_id) if block_id else select(CompletionLog).where(CompletionLog.task_id == task_id, CompletionLog.calendar_block_id.is_(None), CompletionLog.focus_session_id.is_(None))))
     for log in old: db.delete(log)
     if status in ("done", "partial"):
         db.add(CompletionLog(task_id=task_id, calendar_block_id=block_id, completed_minutes=minutes, result=status, note=note))
 
+def has_recorded_focus(db: Session, task_id: str):
+    return db.scalar(select(CompletionLog.id).where(CompletionLog.task_id == task_id,
+                    CompletionLog.focus_session_id.is_not(None), CompletionLog.completed_minutes > 0).limit(1)) is not None
+
 def block_task_status(db: Session, task: Task):
+    focus_results = list(db.scalars(select(CompletionLog.result).where(CompletionLog.task_id == task.id, CompletionLog.focus_session_id.is_not(None))))
+    if "done" in focus_results: return "done"
     statuses = [b.status for b in db.scalars(select(CalendarBlock).where(CalendarBlock.task_id == task.id, CalendarBlock.archived_at.is_(None)))]
-    if not statuses: return task.status
+    if not statuses: return "partial" if "partial" in focus_results else task.status
     if all(s == "done" for s in statuses): return "done"
     if any(s in ("done", "partial") for s in statuses): return "partial"
     if all(s == "missed" for s in statuses): return "missed"
     if all(s == "moved" for s in statuses): return "moved"
-    return "planned"
+    return "partial" if "partial" in focus_results else "planned"
 
 @router.get("/plan")
 def plan(week: str, db: Session = Depends(session)):
@@ -390,13 +396,13 @@ def task_result(id: str, data: ResultIn, db: Session = Depends(session)):
     if task.archived_at: raise HTTPException(422, "Restore task first")
     if data.status == "partial" and not (data.actual_minutes or data.note.strip()):
         raise HTTPException(422, "Partial work needs actual minutes or a note")
-    for log in db.scalars(select(CompletionLog).where(CompletionLog.task_id == id)):
+    for log in db.scalars(select(CompletionLog).where(CompletionLog.task_id == id, CompletionLog.focus_session_id.is_(None))):
         db.delete(log)
     for block in db.scalars(select(CalendarBlock).where(CalendarBlock.task_id == id, CalendarBlock.archived_at.is_(None))):
         block.status = data.status
     task.status = data.status
     if data.status in ("done", "partial"):
-        minutes = data.actual_minutes if data.actual_minutes is not None else (task.estimate_minutes or 0) if data.status == "done" else 0
+        minutes = data.actual_minutes if data.actual_minutes is not None else (task.estimate_minutes or 0) if data.status == "done" and not has_recorded_focus(db, id) else 0
         db.add(CompletionLog(task_id=id, completed_minutes=minutes, result=data.status, note=data.note))
     db.commit()
     db.refresh(task)
@@ -446,9 +452,9 @@ def block_result(id: str, data: ResultIn, db: Session = Depends(session)):
     if data.status == "partial" and not (data.actual_minutes or data.note.strip()):
         raise HTTPException(422, "Partial work needs actual minutes or a note")
     block.status = data.status
-    for direct in db.scalars(select(CompletionLog).where(CompletionLog.task_id == task.id, CompletionLog.calendar_block_id.is_(None))):
+    for direct in db.scalars(select(CompletionLog).where(CompletionLog.task_id == task.id, CompletionLog.calendar_block_id.is_(None), CompletionLog.focus_session_id.is_(None))):
         db.delete(direct)
-    minutes = data.actual_minutes if data.actual_minutes is not None else round((block.end_at - block.start_at).total_seconds() / 60) if data.status == "done" else 0
+    minutes = data.actual_minutes if data.actual_minutes is not None else round((block.end_at - block.start_at).total_seconds() / 60) if data.status == "done" and not has_recorded_focus(db, task.id) else 0
     replace_log(db, task.id, id, data.status, minutes, data.note)
     db.flush()
     task.status = block_task_status(db, task)
@@ -468,9 +474,9 @@ def review_blocks(data: ReviewIn, db: Session = Depends(session)):
         block.status = status
         task = owner_task(db, block.task_id)
         touched.add(task.id)
-        for direct in db.scalars(select(CompletionLog).where(CompletionLog.task_id == task.id, CompletionLog.calendar_block_id.is_(None))):
+        for direct in db.scalars(select(CompletionLog).where(CompletionLog.task_id == task.id, CompletionLog.calendar_block_id.is_(None), CompletionLog.focus_session_id.is_(None))):
             db.delete(direct)
-        minutes = round((block.end_at - block.start_at).total_seconds() / 60) if status == "done" else 0
+        minutes = round((block.end_at - block.start_at).total_seconds() / 60) if status == "done" and not has_recorded_focus(db, task.id) else 0
         replace_log(db, task.id, block.id, status, minutes, "")
     db.flush()
     for task_id in touched:

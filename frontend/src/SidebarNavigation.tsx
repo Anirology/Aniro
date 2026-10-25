@@ -1,10 +1,11 @@
 import {useLayoutEffect,useRef,useState} from 'react'
 import {NavLink,useLocation} from 'react-router-dom'
-import {CalendarBlank,ChartLine,Compass,Plus,Sparkle,Wallet} from '@phosphor-icons/react'
+import {CalendarBlank,ChartLine,Compass,Plus,Sparkle,Timer,Wallet} from '@phosphor-icons/react'
 
 const pages=[
  {path:'/clarity',label:'Clarity',Icon:Compass},
  {path:'/plan',label:'Plan',Icon:CalendarBlank},
+ {path:'/focus',label:'Tomato Mode',Icon:Timer},
  {path:'/reflect',label:'Reflect',Icon:ChartLine},
  {path:'/money',label:'Money',Icon:Wallet},
 ]

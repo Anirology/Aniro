@@ -14,7 +14,7 @@ from sqlalchemy import select, func, delete, insert, update, DateTime
 from sqlalchemy.orm import Session
 from db import SessionLocal
 from models import (User, LifeArea, Track, Module, Vision, Goal, RecurringWeeklyGoal, WeeklyPlan, Task, CalendarBlock,
-                    CompletionLog, Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings,
+                    CompletionLog, FocusPreferences, FocusSession, Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings,
                     BudgetMonth, ExpenseCategory, Expense, GoogleIntegration, CoachUsage, BackupSnapshot)
 
 router = APIRouter(prefix="/api")
@@ -254,6 +254,12 @@ def reflect_summary(db: Session, week: str, today_override: date | None = None):
     task_map = {t.id: t for t in tasks}
     blocks = list(db.scalars(select(CalendarBlock).where(CalendarBlock.task_id.in_(task_map)))) if tasks else []
     logs = list(db.scalars(select(CompletionLog).where(CompletionLog.task_id.in_(task_map)))) if tasks else []
+    focus_sessions = list(db.scalars(select(FocusSession).where(FocusSession.user_id == u.id, FocusSession.ended_at.is_not(None))))
+    focus_records = [{"id": item.id, "task_id": item.task_id, "task_title": (db.get(Task, item.task_id).title if item.task_id and db.get(Task, item.task_id) else None),
+                      "recorded_minutes": item.recorded_minutes, "status": item.result_status, "note": item.result_note,
+                      "next_action": item.next_action, "learning_checked": item.learning_checked, "difficulty": item.difficulty,
+                      "ended_at": dump(item)["ended_at"]} for item in focus_sessions
+                     if start <= (item.ended_at.replace(tzinfo=timezone.utc) if item.ended_at.tzinfo is None else item.ended_at).astimezone(ZoneInfo(u.timezone)).date() < start + timedelta(days=7)]
     blocks_by_id = {b.id: b for b in blocks}
     totals = {}
     def group(task: Task):
@@ -356,8 +362,9 @@ def reflect_summary(db: Session, week: str, today_override: date | None = None):
             "goals": sorted(goal_rows.values(), key=lambda r: (r["sort_order"], r["title"])),
             "modules": sorted(group_rows, key=lambda r: (r["area_name"], r["track_name"], r["module_name"])),
             "balance": balance_rows, "prompts": prompts, "coach_trigger_count": trigger,
+            "focus_records": sorted(focus_records, key=lambda row: row["ended_at"], reverse=True),
             "totals": {"planned_minutes": sum(r["planned_minutes"] for r in group_rows),
-                       "completed_minutes": sum(r["completed_minutes"] for r in group_rows),
+                       "completed_minutes": sum(r["completed_minutes"] for r in group_rows) + sum(row["recorded_minutes"] or 0 for row in focus_records if row["task_id"] is None),
                        "completed_tasks": sum(r["completed_tasks"] for r in group_rows)}}
 
 @router.get("/reflect")
@@ -501,15 +508,17 @@ def delete_expense(id: str, confirm: bool = Query(False), db: Session = Depends(
     db.commit()
     return {"deleted": True}
 
-EXPORT_TABLES = (LifeArea, Track, Module, Vision, RecurringWeeklyGoal, Goal, WeeklyPlan, Task, CalendarBlock, CompletionLog,
+EXPORT_TABLES = (LifeArea, Track, Module, Vision, RecurringWeeklyGoal, Goal, WeeklyPlan, Task, CalendarBlock, FocusPreferences, FocusSession, CompletionLog,
                  Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings, BudgetMonth, ExpenseCategory, Expense)
-LEGACY_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls is not RecurringWeeklyGoal}
+LEGACY_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls not in (RecurringWeeklyGoal, FocusPreferences, FocusSession)}
+PRE_FOCUS_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls not in (FocusPreferences, FocusSession)}
+NO_RECURRING_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls is not RecurringWeeklyGoal}
 
 def validate_backup(payload: dict):
     if payload.get("format") != "aniro-json-v1" or not isinstance(payload.get("user"), dict):
         raise HTTPException(422, "Choose an Aniro JSON backup")
     tables = payload.get("tables")
-    if not isinstance(tables, dict) or set(tables) not in (LEGACY_EXPORT_NAMES, {cls.__tablename__ for cls in EXPORT_TABLES}):
+    if not isinstance(tables, dict) or set(tables) not in (LEGACY_EXPORT_NAMES, PRE_FOCUS_EXPORT_NAMES, NO_RECURRING_EXPORT_NAMES, {cls.__tablename__ for cls in EXPORT_TABLES}):
         raise HTTPException(422, "Backup tables do not match this version of Aniro")
     source_user = payload["user"].get("id")
     if not isinstance(source_user, str) or not source_user:
@@ -523,7 +532,8 @@ def validate_backup(payload: dict):
         ids = set()
         for row in rows:
             legacy_goal = cls is Goal and set(row) == columns - {"recurring_template_id"} if isinstance(row, dict) else False
-            if not isinstance(row, dict) or (set(row) != columns and not legacy_goal) or not isinstance(row.get("id", row.get("user_id")), str):
+            legacy_log = cls is CompletionLog and set(row) == columns - {"focus_session_id"} if isinstance(row, dict) else False
+            if not isinstance(row, dict) or (set(row) != columns and not legacy_goal and not legacy_log) or not isinstance(row.get("id", row.get("user_id")), str):
                 raise HTTPException(422, f"Invalid {cls.__tablename__} record")
             if "user_id" in row and row["user_id"] != source_user:
                 raise HTTPException(422, "Backup includes records from another user")
@@ -574,6 +584,7 @@ def restore_backup(payload: dict, confirm: bool = Query(False), db: Session = De
             for raw in payload["tables"].get(cls.__tablename__, []):
                 row = dict(raw)
                 if cls is Goal: row.setdefault("recurring_template_id", None)
+                if cls is CompletionLog: row.setdefault("focus_session_id", None)
                 if row.get("user_id") == source_user:
                     row["user_id"] = current_user.id
                 for column in cls.__table__.columns:
@@ -618,7 +629,8 @@ def export_json(db: Session = Depends(session)):
                Module: Module.track_id.in_(track_ids), Vision: Vision.user_id == u.id,
                RecurringWeeklyGoal: RecurringWeeklyGoal.user_id == u.id, Goal: Goal.user_id == u.id,
                WeeklyPlan: WeeklyPlan.user_id == u.id, Task: Task.user_id == u.id,
-               CalendarBlock: CalendarBlock.task_id.in_(task_ids), CompletionLog: CompletionLog.task_id.in_(task_ids),
+               CalendarBlock: CalendarBlock.task_id.in_(task_ids), FocusPreferences: FocusPreferences.user_id == u.id,
+               FocusSession: FocusSession.user_id == u.id, CompletionLog: CompletionLog.task_id.in_(task_ids),
                Habit: Habit.user_id == u.id, HabitCheckin: HabitCheckin.habit_id.in_(habit_ids),
                BalanceTarget: BalanceTarget.user_id == u.id, AreaBalanceTarget: AreaBalanceTarget.user_id == u.id,
                ReflectSettings: ReflectSettings.user_id == u.id,

@@ -1,0 +1,7 @@
+.quoteFooter{gap:8px;min-width:0;color:#f3f6ef}
+.quoteFooter svg{color:var(--lime);flex:none}
+.quoteFooter p{font-size:12px;line-height:1.55;margin:0;overflow-wrap:anywhere}
+.quoteFooter a,.quoteFooter span{font-size:10px;color:#b5c2b4;line-height:1.45}
+.quoteFooter a:hover{text-decoration:underline;color:white}
+@media(max-width:900px){.quoteFooter{padding:12px}.quoteFooter p{font-size:11px}}
+@media(max-width:650px){.sidebar{flex-wrap:wrap}.sideFooter.quoteFooter{display:flex;flex-direction:row;align-items:center;width:100%;margin:0;padding:6px 8px;gap:7px;border-radius:9px}.quoteFooter svg{width:17px;height:17px}.quoteFooter p{font-size:11px;line-height:1.3;flex:1}.quoteFooter a,.quoteFooter span{font-size:10px;white-space:nowrap}}

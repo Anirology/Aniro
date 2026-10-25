@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Aniro">
+  <rect width="64" height="64" rx="14" fill="#202b2a"/>
+  <path d="M13 50 30 14M30 14l17 36" fill="none" stroke="#c6fb4a" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M22 37h16" fill="none" stroke="#c6fb4a" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="50" cy="17" r="4" fill="#c6fb4a"/>
+</svg>

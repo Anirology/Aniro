@@ -211,6 +211,8 @@ TABLES = {"areas": LifeArea,"tracks": Track,"modules": Module,"visions": Vision,
 
 from plan_api import router as plan_router
 app.include_router(plan_router)
+from focus_api import router as focus_router
+app.include_router(focus_router)
 from stage3_api import router as stage3_router
 app.include_router(stage3_router)
 from stage4_api import router as stage4_router

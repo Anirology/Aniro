@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from db import SessionLocal
@@ -68,8 +68,12 @@ def hierarchy(db: Session, goal: Goal | Vision):
     area = obj(db, LifeArea, goal.life_area_id)
     track = obj(db, Track, goal.track_id) if goal.track_id else None
     module = obj(db, Module, goal.module_id) if goal.module_id else None
+    breadcrumb = " → ".join([x.name for x in (area, track, module) if x])
+    if isinstance(goal, Goal) and goal.occurrence_date:
+        day = date.fromisoformat(goal.occurrence_date).strftime("%a, %b %d")
+        breadcrumb += f" · {day} · {goal.recurrence_frequency}"
     return {
-        "breadcrumb": " → ".join([x.name for x in (area, track, module) if x]),
+        "breadcrumb": breadcrumb,
         "color_key": track.color_key if track else area.color_key,
         "area_name": area.name,
         "track_name": track.name if track else None,
@@ -104,6 +108,7 @@ class TaskIn(BaseModel):
     due_at: datetime | None = None
     estimate_minutes: int | None = Field(default=None, ge=0, le=10080)
     sort_order: int = 0
+    recurrence_frequency: Literal["daily", "weekly"] | None = None
 
 class BlockIn(BaseModel):
     task_id: str
@@ -242,7 +247,65 @@ def validate_task(db: Session, data: TaskIn):
         raise HTTPException(422, "Module does not match goal")
 
 def task_values(data: TaskIn):
-    return {**data.model_dump(exclude={"due_at"}), "due_at": utc_naive(data.due_at) if data.due_at else None}
+    return {**data.model_dump(exclude={"due_at", "recurrence_frequency"}), "due_at": utc_naive(data.due_at) if data.due_at else None}
+
+
+def occurrence_days(start: str, week: str, frequency: str):
+    first, monday = date.fromisoformat(start), week_date(week)
+    return [day.isoformat() for offset in range(7) if (day := monday + timedelta(days=offset)) >= first
+            and (frequency == "daily" or day.weekday() == first.weekday())]
+
+
+def set_recurrence(db: Session, item: Goal | Task, frequency: str | None, start: str | None):
+    if item.recurring_template_id if isinstance(item, Goal) else False:
+        if frequency: raise HTTPException(422, "This module goal already has its own weekly repeat")
+        return
+    if frequency and not start:
+        raise HTTPException(422, "Choose a start date for recurrence")
+    if frequency and not item.recurrence_id:
+        db.flush()
+        item.recurrence_id = item.id
+        item.occurrence_date = start
+    if item.recurrence_id:
+        source = db.get(type(item), item.recurrence_id)
+        if source:
+            source.recurrence_frequency = frequency
+            if frequency:
+                fields = ("title", "description", "life_area_id", "track_id", "module_id", "parent_vision_id", "sort_order") if isinstance(item, Goal) else ("title", "module_id", "estimate_minutes", "sort_order")
+                for field in fields: setattr(source, field, getattr(item, field))
+            db.execute(update(type(item)).where(type(item).recurrence_id == item.recurrence_id).values(recurrence_frequency=frequency))
+        item.recurrence_frequency = frequency
+
+
+def materialize_custom_recurrences(db: Session, user_id: str, week: str):
+    for cls in (Goal, Task):
+        sources = list(db.scalars(select(cls).where(cls.user_id == user_id, cls.recurrence_frequency.is_not(None), cls.id == cls.recurrence_id)))
+        for source in sources:
+            for day in occurrence_days(source.occurrence_date, week, source.recurrence_frequency):
+                if db.scalar(select(cls.id).where(cls.recurrence_id == source.id, cls.occurrence_date == day).limit(1)): continue
+                if cls is Goal:
+                    instance = Goal(user_id=user_id, life_area_id=source.life_area_id, track_id=source.track_id,
+                                    module_id=source.module_id, parent_vision_id=source.parent_vision_id,
+                                    title=source.title, description=source.description, target_date=week,
+                                    sort_order=source.sort_order, recurrence_id=source.id,
+                                    recurrence_frequency=source.recurrence_frequency, occurrence_date=day)
+                else:
+                    linked_goal = db.get(Goal, source.goal_id) if source.goal_id else None
+                    match = db.scalar(select(Goal).where(Goal.recurrence_id == linked_goal.recurrence_id,
+                        Goal.occurrence_date == day).limit(1)) if linked_goal and linked_goal.recurrence_id else None
+                    if linked_goal and linked_goal.target_date == week: match = linked_goal
+                    due = None
+                    if source.due_at:
+                        local = source.due_at.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(current_user(db).timezone))
+                        due = utc_naive(datetime.combine(date.fromisoformat(day), local.timetz()))
+                    instance = Task(user_id=user_id, goal_id=match.id if match else None,
+                                    module_id=source.module_id, week_start=week, title=source.title,
+                                    due_at=due, estimate_minutes=source.estimate_minutes, sort_order=source.sort_order,
+                                    recurrence_id=source.id, recurrence_frequency=source.recurrence_frequency,
+                                    occurrence_date=day)
+                db.add(instance)
+        db.flush()
+    db.commit()
 
 def validate_block(db: Session, data: BlockIn, own_id: str | None = None):
     task = owner_task(db, data.task_id)
@@ -284,6 +347,7 @@ def plan(week: str, db: Session = Depends(session)):
     week_date(week)
     u = current_user(db)
     materialize_recurring_goals(db, u.id, week)
+    materialize_custom_recurrences(db, u.id, week)
     areas = list(db.scalars(select(LifeArea).where(LifeArea.user_id == u.id).order_by(LifeArea.sort_order, LifeArea.name)))
     area_ids = [a.id for a in areas]
     tracks = list(db.scalars(select(Track).where(Track.life_area_id.in_(area_ids)))) if area_ids else []
@@ -331,7 +395,12 @@ def save_timezone(data: TimezoneIn, db: Session = Depends(session)):
 @router.post("/tasks", status_code=201)
 def add_task(data: TaskIn, db: Session = Depends(session)):
     validate_task(db, data)
-    return commit(db, Task(user_id=current_user(db).id, **task_values(data)))
+    task = Task(user_id=current_user(db).id, **task_values(data))
+    db.add(task)
+    if data.recurrence_frequency:
+        start = data.due_at.astimezone(ZoneInfo(current_user(db).timezone)).date().isoformat() if data.due_at else data.week_start
+        set_recurrence(db, task, data.recurrence_frequency, start)
+    return commit(db, task)
 
 @router.post("/tasks/quick", status_code=201)
 def quick_task(data: QuickTaskIn, db: Session = Depends(session)):
@@ -369,6 +438,8 @@ def edit_task(id: str, data: TaskIn, db: Session = Depends(session)):
         raise HTTPException(409, "Move or remove scheduled blocks before changing the task week")
     title_changed = task.title != data.title
     for key, value in task_values(data).items(): setattr(task, key, value)
+    start = task.occurrence_date or data.week_start
+    set_recurrence(db, task, data.recurrence_frequency, start)
     if title_changed:
         for block in db.scalars(select(CalendarBlock).where(CalendarBlock.task_id == id, CalendarBlock.google_event_id.is_not(None))):
             if block.sync_state != "imported": block.sync_state = "pending_update"

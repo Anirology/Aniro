@@ -531,9 +531,12 @@ def validate_backup(payload: dict):
         columns = {column.name for column in cls.__table__.columns}
         ids = set()
         for row in rows:
-            legacy_goal = cls is Goal and set(row) == columns - {"recurring_template_id"} if isinstance(row, dict) else False
-            legacy_log = cls is CompletionLog and set(row) == columns - {"focus_session_id"} if isinstance(row, dict) else False
-            if not isinstance(row, dict) or (set(row) != columns and not legacy_goal and not legacy_log) or not isinstance(row.get("id", row.get("user_id")), str):
+            allowed_missing = set()
+            if cls in (Goal, Task): allowed_missing.update({"recurrence_id", "recurrence_frequency", "occurrence_date"})
+            if cls is Goal: allowed_missing.add("recurring_template_id")
+            if cls is CompletionLog: allowed_missing.add("focus_session_id")
+            legacy = isinstance(row, dict) and not (set(row) - columns) and (columns - set(row)).issubset(allowed_missing)
+            if not isinstance(row, dict) or (set(row) != columns and not legacy) or not isinstance(row.get("id", row.get("user_id")), str):
                 raise HTTPException(422, f"Invalid {cls.__tablename__} record")
             if "user_id" in row and row["user_id"] != source_user:
                 raise HTTPException(422, "Backup includes records from another user")
@@ -584,6 +587,10 @@ def restore_backup(payload: dict, confirm: bool = Query(False), db: Session = De
             for raw in payload["tables"].get(cls.__tablename__, []):
                 row = dict(raw)
                 if cls is Goal: row.setdefault("recurring_template_id", None)
+                if cls in (Goal, Task):
+                    row.setdefault("recurrence_id", None)
+                    row.setdefault("recurrence_frequency", None)
+                    row.setdefault("occurrence_date", None)
                 if cls is CompletionLog: row.setdefault("focus_session_id", None)
                 if row.get("user_id") == source_user:
                     row["user_id"] = current_user.id

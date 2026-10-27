@@ -69,12 +69,21 @@ def ensure_hosted_schema():
                 connection.execute(text("ALTER TABLE completion_logs ADD COLUMN focus_session_id VARCHAR(36) REFERENCES focus_sessions(id)"))
                 connection.execute(text("CREATE UNIQUE INDEX ix_completion_logs_focus_session_id ON completion_logs (focus_session_id)"))
                 connection.execute(text("UPDATE alembic_version SET version_num = '0010_focus_sessions'"))
-                return
-            if revision != "0010_focus_sessions":
+                revision = "0010_focus_sessions"
+            if revision == "0010_focus_sessions":
+                for table in ("goals", "tasks"):
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN recurrence_id VARCHAR(36)"))
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN recurrence_frequency VARCHAR(10)"))
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN occurrence_date VARCHAR(10)"))
+                    connection.execute(text(f"CREATE INDEX ix_{table}_recurrence_id ON {table} (recurrence_id)"))
+                    connection.execute(text(f"CREATE UNIQUE INDEX {table}_recurrence_occurrence ON {table} (recurrence_id, occurrence_date)"))
+                connection.execute(text("UPDATE alembic_version SET version_num = '0011_custom_recurrence'"))
+                revision = "0011_custom_recurrence"
+            if revision != "0011_custom_recurrence":
                 raise RuntimeError(f"Unsupported hosted schema revision: {revision}")
             return
         if tables.intersection(Base.metadata.tables):
             raise RuntimeError("Hosted database already has Aniro tables but no migration version")
         Base.metadata.create_all(connection)
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0010_focus_sessions')"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0011_custom_recurrence')"))

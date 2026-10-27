@@ -5,7 +5,7 @@ import {CalendarBlank,ChartLine,Compass,Plus,Sparkle,Timer,Wallet} from '@phosph
 const pages=[
  {path:'/clarity',label:'Clarity',Icon:Compass},
  {path:'/plan',label:'Plan',Icon:CalendarBlank},
- {path:'/focus',label:'Tomato Mode',Icon:Timer},
+ {path:'/focus',label:'Study Flow',Icon:Timer},
  {path:'/reflect',label:'Reflect',Icon:ChartLine},
  {path:'/money',label:'Money',Icon:Wallet},
 ]

@@ -1,0 +1,93 @@
+.focusPage{--focus-green:#77a832;--focus-deep:#203424;--focus-soft:#edf6df;--focus-mist:#f7faf3}
+.focusPageHeader{align-items:center;margin-bottom:22px}
+.focusKicker{display:block;margin-bottom:7px;color:#668c35;font-size:10px;font-weight:900;letter-spacing:.12em}
+.focusPageHeader h1{margin-bottom:7px}
+.focusPageHeader p{max-width:620px;line-height:1.5}
+.focusHeaderActions{display:flex;align-items:center;gap:9px}
+.focusFullscreen{display:inline-flex;align-items:center;gap:7px;min-height:39px;padding:8px 12px;border:1px solid #dce5d6;border-radius:10px;background:#fff;color:#40523c;font-size:12px;font-weight:800}
+.focusFullscreen:hover{background:#f4f8ee;border-color:#bfd399}
+
+.focusStart{max-width:760px;padding:38px;border-radius:24px;background:linear-gradient(145deg,#fff 0%,#fbfdf8 100%)}
+.focusStartIntro h2{margin:7px 0 8px;font-size:30px}
+.focusStartIntro p{max-width:610px;line-height:1.55}
+.focusStart .focusField{margin:25px 0 20px}
+.focusPresetField>span{display:block;margin-bottom:8px;color:#536250;font-size:12px;font-weight:800}
+.focusPresets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.focusPresets button{display:grid;gap:2px;min-height:96px;padding:14px;text-align:left;border:1px solid #dce5d6;border-radius:14px;background:#fff;color:#31402e}
+.focusPresets button:hover{border-color:#aeca84;background:#f7fbeF}
+.focusPresets button.selected{border-color:#8ab44c;background:linear-gradient(145deg,#eff9df,#e5f3cf);box-shadow:0 0 0 2px #c9e7a155}
+.focusPresets strong{font-size:19px;letter-spacing:-.4px}
+.focusPresets span{font-size:12px;font-weight:800}
+.focusPresets small{color:#74806f;font-size:10px}
+.focusStartTip{display:flex;align-items:flex-start;gap:10px;margin:17px 0;padding:13px 14px;border:1px solid #dce8cc;border-radius:12px;background:#f4f9eb;color:#50614a;font-size:12px;line-height:1.5}
+.focusStartTip svg{flex:0 0 auto;margin-top:1px;color:#668f31}
+.focusStartTip strong{display:block;color:#2f432b}
+.focusStartButton{min-width:210px}
+
+.focusLayout{grid-template-columns:minmax(0,1fr) 320px;gap:16px}
+.focusTask{border-radius:18px;padding:20px 23px}
+.focusTimer{position:relative;overflow:hidden;border-radius:24px;background:radial-gradient(circle at 50% 0,#f6fbeD 0,#fff 42%);border-color:#dfe8d8}
+.focusTimer:before{content:"";position:absolute;inset:0 0 auto;height:4px;background:linear-gradient(90deg,#a9d45f,#77a832,#c6fb4a)}
+.focusTimerTop{display:flex;align-items:center;justify-content:center;gap:12px}
+.focusLiveState{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:20px;background:#f0f3ed;color:#687064;font-size:9px;font-weight:900;letter-spacing:.06em;text-transform:uppercase}
+.focusLiveState i{width:6px;height:6px;border-radius:50%;background:#98a294}
+.focusLiveState.isRunning{background:#edf7df;color:#4c7127}
+.focusLiveState.isRunning i{background:#78a933;box-shadow:0 0 0 4px #78a9331f;animation:focusPulse 1.8s ease-in-out infinite}
+.focusDigits{margin:8px 0 4px;line-height:1.18}
+.focusProgress{width:min(430px,86%);height:7px;margin:0 auto 19px;overflow:hidden;border-radius:20px;background:#e8ede4}
+.focusProgress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#8bb94a,#c6fb4a);transition:width .5s linear}
+.focusTimer>p{margin-bottom:22px}
+
+.focusSide{gap:11px}
+.focusBuddy,.focusSessionCard,.focusParking,.focusReset{border:1px solid #dfe6da;border-radius:17px;background:#fff;box-shadow:0 5px 20px #22312209}
+.focusBuddy{padding:15px;background:linear-gradient(145deg,#263b2a,#1f3023);color:#fff;border-color:#2b432f}
+.focusBuddyHead{display:flex;align-items:center;gap:9px}
+.focusBuddyHead>span{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#c6fb4a;color:#253b25}
+.focusBuddyHead small,.focusBuddyHead strong{display:block}
+.focusBuddyHead small{color:#b9ceaD;font-size:8px;font-weight:900;letter-spacing:.1em}
+.focusBuddyHead strong{margin-top:2px;font-size:13px}
+.focusBuddy>p{margin:12px 0 0;color:#dce8d9;font-size:12px;line-height:1.55}
+.focusBuddyAction{margin-top:12px;padding:10px;border-radius:10px;background:#ffffff10;border:1px solid #ffffff12}
+.focusBuddyAction span,.focusBuddyAction strong{display:block}
+.focusBuddyAction span{margin-bottom:3px;color:#bcd0b9;font-size:9px;font-weight:850;text-transform:uppercase}
+.focusBuddyAction strong{font-size:11px;line-height:1.4}
+
+.focusSessionCard{padding:16px}
+.focusSessionHead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.focusSessionHead>div:first-child>strong{display:block;margin-top:5px;font-size:32px;line-height:1;letter-spacing:-1.2px}
+.focusSessionHead>div:first-child>strong small{font-size:14px;letter-spacing:0;color:#657061}
+.focusSessionHead p{margin:5px 0 0;color:#778074;font-size:10px}
+.focusSessionRing{--progress:0%;width:64px;height:64px;border-radius:50%;display:grid;place-content:center;text-align:center;background:radial-gradient(circle,#fff 57%,transparent 59%),conic-gradient(#8fbd4b var(--progress),#e8ede3 0)}
+.focusSessionRing span{font-size:17px;font-weight:900;line-height:1}
+.focusSessionRing small{margin-top:2px;color:#778171;font-size:8px;font-weight:800;text-transform:uppercase}
+.focusIntervalTrack{display:grid;grid-template-columns:repeat(auto-fit,minmax(12px,1fr));gap:5px;margin:15px 0 12px}
+.focusIntervalTrack i{height:6px;border-radius:20px;background:#e5eae1}
+.focusIntervalTrack i.done{background:#7faa3d}
+.focusIntervalTrack i.current{background:#c6fb4a;box-shadow:0 0 0 2px #c6fb4a3d}
+.focusSessionMeta{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.focusSessionMeta span{display:flex;align-items:center;gap:5px;padding:8px;border-radius:9px;background:#f5f8f1;color:#52604e;font-size:9px;font-weight:750}
+.focusSessionMeta svg{color:#6c9535;flex:0 0 auto}
+.focusSessionNote{display:block;margin-top:10px;color:#798276;font-size:9px;line-height:1.45}
+
+.focusParking{padding:14px}
+.focusParkingHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+.focusParkingHead>span{display:flex;align-items:center;gap:6px;color:#344532}
+.focusParkingHead strong{font-size:11px}
+.focusParkingHead>small{color:#778274;font-size:9px}
+.focusParking textarea{width:100%;min-height:68px;resize:vertical;border:1px solid #e0e6dc;border-radius:10px;background:#fafcf8;padding:9px 10px;color:#293428;font-size:11px;line-height:1.45}
+.focusParking>span{display:block;margin-top:5px;color:#8a9287;font-size:8px;text-align:right}
+.focusReset{display:grid;grid-template-columns:1fr 1fr;gap:1px;padding:6px;background:#f7f9f5}
+.focusReset>div{display:flex;align-items:center;gap:7px;padding:8px}
+.focusReset>div+div{border-left:1px solid #e1e6de}
+.focusReset svg{color:#70983b;flex:0 0 auto}
+.focusReset strong,.focusReset small{display:block}
+.focusReset strong{font-size:10px}
+.focusReset small{margin-top:2px;color:#7c8479;font-size:8px;line-height:1.25}
+.focusCustomize{border-radius:15px;background:#fff}
+.focusCustomize summary{padding:13px 15px}
+
+@keyframes focusPulse{0%,100%{opacity:1}50%{opacity:.45}}
+@media(max-width:1050px){.focusLayout{grid-template-columns:minmax(0,1fr) 285px}}
+@media(max-width:820px){.focusLayout{grid-template-columns:1fr}.focusSide{grid-template-columns:repeat(2,minmax(0,1fr))}.focusBuddy,.focusCustomize{grid-column:1/-1}}
+@media(max-width:620px){.focusPageHeader{align-items:flex-start}.focusHeaderActions{width:100%;justify-content:space-between}.focusHeaderIcon{order:-1}.focusStart{padding:24px 19px}.focusPresets{grid-template-columns:1fr}.focusPresets button{min-height:74px}.focusSide{grid-template-columns:1fr}.focusBuddy,.focusCustomize{grid-column:auto}.focusSessionMeta{grid-template-columns:1fr}.focusReset{grid-template-columns:1fr}.focusReset>div+div{border-left:0;border-top:1px solid #e1e6de}}
+@media(prefers-reduced-motion:reduce){.focusLiveState.isRunning i{animation:none}.focusProgress i{transition:none}}

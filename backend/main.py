@@ -58,6 +58,7 @@ class GoalIn(BaseModel):
     status: Literal["active", "completed"] = "active"
     target_date: str | None = None
     sort_order: int = 0
+    recurrence_frequency: Literal["daily", "weekly"] | None = None
 
 class VisionIn(BaseModel):
     life_area_id: str
@@ -182,7 +183,12 @@ def edit_module(id: str, data: ModuleIn, db: Session = Depends(session)):
 @app.post("/api/goals", status_code=201)
 def add_goal(data: GoalIn, db: Session = Depends(session)):
     validate_goal(db,data)
-    return save(db,Goal(user_id=user(db).id,**data.model_dump()))
+    from plan_api import set_recurrence
+    goal = Goal(user_id=user(db).id, **data.model_dump(exclude={"recurrence_frequency"}))
+    db.add(goal)
+    if data.recurrence_frequency:
+        set_recurrence(db, goal, data.recurrence_frequency, data.target_date)
+    return save(db, goal)
 
 @app.put("/api/goals/{id}")
 def edit_goal(id: str, data: GoalIn, db: Session = Depends(session)):
@@ -191,7 +197,9 @@ def edit_goal(id: str, data: GoalIn, db: Session = Depends(session)):
     validate_goal(db,data)
     if obj.recurring_template_id and (data.life_area_id != obj.life_area_id or data.track_id != obj.track_id or data.module_id != obj.module_id or data.target_date != obj.target_date):
         raise HTTPException(422,"A recurring module goal must stay with its module and week")
-    for k,v in data.model_dump().items(): setattr(obj,k,v)
+    for k,v in data.model_dump(exclude={"recurrence_frequency"}).items(): setattr(obj,k,v)
+    from plan_api import set_recurrence
+    set_recurrence(db, obj, data.recurrence_frequency, obj.occurrence_date or data.target_date)
     return save(db,obj)
 
 @app.post("/api/visions", status_code=201)

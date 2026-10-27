@@ -90,7 +90,15 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(self.db.get(Goal, goal.id).recurring_template_id, template.id)
         legacy = json.loads(json.dumps(exported))
         del legacy["tables"]["recurring_weekly_goals"]
-        for row in legacy["tables"]["goals"]: del row["recurring_template_id"]
+        for row in legacy["tables"]["goals"]:
+            del row["recurring_template_id"]
+            del row["recurrence_id"]
+            del row["recurrence_frequency"]
+            del row["occurrence_date"]
+        for row in legacy["tables"]["tasks"]:
+            del row["recurrence_id"]
+            del row["recurrence_frequency"]
+            del row["occurrence_date"]
         self.assertGreater(preview_backup(legacy)["records"], 0)
         restore_backup(legacy, True, self.db)
         self.db.expire_all()

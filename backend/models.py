@@ -65,7 +65,7 @@ class Vision(Base):
 
 class Goal(Base):
     __tablename__ = "goals"
-    __table_args__ = (CheckConstraint("horizon = 'week'", name="goal_horizon"), UniqueConstraint("recurring_template_id", "target_date", name="recurring_goal_template_week"))
+    __table_args__ = (CheckConstraint("horizon = 'week'", name="goal_horizon"), UniqueConstraint("recurring_template_id", "target_date", name="recurring_goal_template_week"), UniqueConstraint("recurrence_id", "occurrence_date", name="goals_recurrence_occurrence"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     life_area_id: Mapped[str] = mapped_column(ForeignKey("life_areas.id"), index=True)
@@ -80,6 +80,9 @@ class Goal(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     recurring_template_id: Mapped[str | None] = mapped_column(ForeignKey("recurring_weekly_goals.id"), index=True)
+    recurrence_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    recurrence_frequency: Mapped[str | None] = mapped_column(String(10))
+    occurrence_date: Mapped[str | None] = mapped_column(String(10))
 
 class RecurringWeeklyGoal(Base):
     __tablename__ = "recurring_weekly_goals"
@@ -101,7 +104,7 @@ class WeeklyPlan(Base):
 
 class Task(Base):
     __tablename__ = "tasks"
-    __table_args__ = (CheckConstraint("status IN ('planned','done','partial','missed','moved')", name="task_status"),)
+    __table_args__ = (CheckConstraint("status IN ('planned','done','partial','missed','moved')", name="task_status"), UniqueConstraint("recurrence_id", "occurrence_date", name="tasks_recurrence_occurrence"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     goal_id: Mapped[str | None] = mapped_column(ForeignKey("goals.id"), index=True)
@@ -113,6 +116,9 @@ class Task(Base):
     estimate_minutes: Mapped[int | None] = mapped_column(Integer)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recurrence_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    recurrence_frequency: Mapped[str | None] = mapped_column(String(10))
+    occurrence_date: Mapped[str | None] = mapped_column(String(10))
 
 class CalendarBlock(Base):
     __tablename__ = "calendar_blocks"

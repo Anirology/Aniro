@@ -240,11 +240,45 @@ class ExpenseCategory(Base):
     color_key: Mapped[str] = mapped_column(String(30), default="lime")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+class FinancialAccount(Base):
+    __tablename__ = "financial_accounts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    account_type: Mapped[str] = mapped_column(String(20), default="cash")
+    balance_minor: Mapped[int] = mapped_column(Integer, default=0)
+    color_key: Mapped[str] = mapped_column(String(30), default="lime")
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+class ExpenseEnvelope(Base):
+    __tablename__ = "expense_envelopes"
+    __table_args__ = (UniqueConstraint("budget_month_id", "category_id", name="envelope_budget_category"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    budget_month_id: Mapped[str] = mapped_column(ForeignKey("budget_months.id"), index=True)
+    category_id: Mapped[str] = mapped_column(ForeignKey("expense_categories.id"), index=True)
+    limit_minor: Mapped[int] = mapped_column(Integer)
+    essential: Mapped[bool] = mapped_column(Boolean, default=True)
+
+class UpcomingBill(Base):
+    __tablename__ = "upcoming_bills"
+    __table_args__ = (UniqueConstraint("series_id", "due_on", name="bill_series_due"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("financial_accounts.id"), index=True)
+    series_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    due_on: Mapped[str] = mapped_column(String(10), index=True)
+    recurring_monthly: Mapped[bool] = mapped_column(Boolean, default=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 class Expense(Base):
     __tablename__ = "expenses"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     budget_month_id: Mapped[str] = mapped_column(ForeignKey("budget_months.id"), index=True)
     category_id: Mapped[str] = mapped_column(ForeignKey("expense_categories.id"), index=True)
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("financial_accounts.id"), index=True)
     amount_minor: Mapped[int] = mapped_column(Integer)
     spent_on: Mapped[str] = mapped_column(String(10), index=True)
     description: Mapped[str] = mapped_column(String(240), default="")

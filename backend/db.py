@@ -79,11 +79,19 @@ def ensure_hosted_schema():
                     connection.execute(text(f"CREATE UNIQUE INDEX {table}_recurrence_occurrence ON {table} (recurrence_id, occurrence_date)"))
                 connection.execute(text("UPDATE alembic_version SET version_num = '0011_custom_recurrence'"))
                 revision = "0011_custom_recurrence"
-            if revision != "0011_custom_recurrence":
+            if revision == "0011_custom_recurrence":
+                Base.metadata.tables["financial_accounts"].create(connection, checkfirst=True)
+                Base.metadata.tables["expense_envelopes"].create(connection, checkfirst=True)
+                Base.metadata.tables["upcoming_bills"].create(connection, checkfirst=True)
+                connection.execute(text("ALTER TABLE expenses ADD COLUMN account_id VARCHAR(36) REFERENCES financial_accounts(id)"))
+                connection.execute(text("CREATE INDEX ix_expenses_account_id ON expenses (account_id)"))
+                connection.execute(text("UPDATE alembic_version SET version_num = '0012_student_money_tools'"))
+                revision = "0012_student_money_tools"
+            if revision != "0012_student_money_tools":
                 raise RuntimeError(f"Unsupported hosted schema revision: {revision}")
             return
         if tables.intersection(Base.metadata.tables):
             raise RuntimeError("Hosted database already has Aniro tables but no migration version")
         Base.metadata.create_all(connection)
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0011_custom_recurrence')"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0012_student_money_tools')"))

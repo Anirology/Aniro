@@ -1,11 +1,13 @@
 """Stage 3 local reflection, money, and portable exports."""
 import csv
+import calendar
 import io
 import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -15,7 +17,9 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 from models import (User, LifeArea, Track, Module, Vision, Goal, RecurringWeeklyGoal, WeeklyPlan, Task, CalendarBlock,
                     CompletionLog, FocusPreferences, FocusSession, Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings,
-                    BudgetMonth, ExpenseCategory, Expense, GoogleIntegration, CoachUsage, BackupSnapshot)
+                    BudgetMonth, ExpenseCategory, FinancialAccount, ExpenseEnvelope, UpcomingBill, Expense,
+                    GoogleIntegration, CoachUsage, BackupSnapshot)
+from money_pdf import build_expense_pdf
 
 router = APIRouter(prefix="/api")
 
@@ -107,12 +111,31 @@ class ExpenseIn(BaseModel):
     amount_minor: int = Field(gt=0, le=1_000_000_000)
     spent_on: str
     description: str = Field(default="", max_length=240)
+    account_id: str | None = None
 
 class QuickExpenseIn(BaseModel):
     category_name: str = Field(min_length=1, max_length=120)
     amount_minor: int = Field(gt=0, le=1_000_000_000)
     spent_on: str
     description: str = Field(default="", max_length=240)
+    account_id: str | None = None
+
+class AccountIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    account_type: Literal["cash", "bank", "ewallet"] = "bank"
+    balance_minor: int = Field(ge=-1_000_000_000, le=1_000_000_000)
+    color_key: str = Field(default="lime", max_length=30)
+
+class EnvelopeIn(BaseModel):
+    limit_minor: int = Field(ge=0, le=1_000_000_000)
+    essential: bool = True
+
+class BillIn(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    amount_minor: int = Field(gt=0, le=1_000_000_000)
+    due_on: str
+    account_id: str | None = None
+    recurring_monthly: bool = False
 
 def validate_habit_links(db: Session, value: HabitIn):
     area = owned(db, LifeArea, value.life_area_id)
@@ -375,12 +398,47 @@ def budget_for(db: Session, year: int, month: int):
     return db.scalar(select(BudgetMonth).where(BudgetMonth.user_id == user(db).id,
                                                 BudgetMonth.year == year, BudgetMonth.month == month))
 
+def account_for(db: Session, account_id: str | None, require_active: bool = True):
+    if not account_id:
+        return None
+    account = owned(db, FinancialAccount, account_id)
+    if require_active and account.archived_at:
+        raise HTTPException(422, "Restore the account first")
+    return account
+
+def materialize_monthly_bills(db: Session, parsed: date):
+    u = user(db)
+    last_day = calendar.monthrange(parsed.year, parsed.month)[1]
+    month_end = parsed.replace(day=last_day)
+    sources = list(db.scalars(select(UpcomingBill).where(
+        UpcomingBill.user_id == u.id, UpcomingBill.recurring_monthly.is_(True),
+        UpcomingBill.archived_at.is_(None), UpcomingBill.id == UpcomingBill.series_id)))
+    changed = False
+    for source in sources:
+        source_due = day(source.due_on)
+        if source_due > month_end:
+            continue
+        due = parsed.replace(day=min(source_due.day, last_day)).isoformat()
+        exists = db.scalar(select(UpcomingBill.id).where(
+            UpcomingBill.series_id == source.id, UpcomingBill.due_on == due).limit(1))
+        if not exists:
+            db.add(UpcomingBill(user_id=u.id, account_id=source.account_id, series_id=source.id,
+                                name=source.name, amount_minor=source.amount_minor, due_on=due,
+                                recurring_monthly=True))
+            changed = True
+    if changed:
+        db.commit()
+
 def money_summary(db: Session, month: str, today_override: date | None = None):
     parsed = month_key(month)
     u = user(db)
     budget = budget_for(db, parsed.year, parsed.month)
+    materialize_monthly_bills(db, parsed)
     categories = list(db.scalars(select(ExpenseCategory).where(ExpenseCategory.user_id == u.id).order_by(ExpenseCategory.name)))
     category_map = {c.id: c for c in categories}
+    accounts = list(db.scalars(select(FinancialAccount).where(
+        FinancialAccount.user_id == u.id, FinancialAccount.archived_at.is_(None)).order_by(FinancialAccount.name)))
+    account_map = {a.id: a for a in accounts}
     expenses = list(db.scalars(select(Expense).where(Expense.budget_month_id == budget.id).order_by(Expense.spent_on.desc(), Expense.id.desc()))) if budget else []
     spent = sum(e.amount_minor for e in expenses)
     remaining = budget.limit_minor - spent if budget else None
@@ -398,12 +456,52 @@ def money_summary(db: Session, month: str, today_override: date | None = None):
             breakdown.append({"category_id": category.id, "name": category.name,
                               "color_key": category.color_key, "amount_minor": total,
                               "percentage": round(total * 100 / spent, 1) if spent else 0})
+    envelopes = list(db.scalars(select(ExpenseEnvelope).where(ExpenseEnvelope.budget_month_id == budget.id))) if budget else []
+    envelope_rows = []
+    essential_reserved = 0
+    for envelope in envelopes:
+        category = category_map.get(envelope.category_id)
+        if not category:
+            continue
+        category_spent = sum(e.amount_minor for e in expenses if e.category_id == category.id)
+        remaining_envelope = max(0, envelope.limit_minor - category_spent)
+        if envelope.essential:
+            essential_reserved += remaining_envelope
+        envelope_rows.append({**dump(envelope), "category_name": category.name, "category_color": category.color_key,
+                              "spent_minor": category_spent, "remaining_minor": remaining_envelope,
+                              "percentage": round(category_spent * 100 / envelope.limit_minor, 1) if envelope.limit_minor else 0})
+    month_prefix = month + "-"
+    bills = list(db.scalars(select(UpcomingBill).where(
+        UpcomingBill.user_id == u.id, UpcomingBill.archived_at.is_(None),
+        UpcomingBill.due_on.like(month_prefix + "%")).order_by(UpcomingBill.due_on, UpcomingBill.name)))
+    unpaid_bills = sum(b.amount_minor for b in bills if b.paid_at is None)
+    account_total = sum(a.balance_minor for a in accounts)
+    if month < today.strftime("%Y-%m"):
+        safe_days = 1
+    elif month == today.strftime("%Y-%m"):
+        safe_days = calendar.monthrange(parsed.year, parsed.month)[1] - today.day + 1
+    else:
+        safe_days = calendar.monthrange(parsed.year, parsed.month)[1]
+    safe_to_spend = max(0, account_total - essential_reserved - unpaid_bills) // safe_days if accounts else None
+    trend_end = calendar.monthrange(parsed.year, parsed.month)[1]
+    if month == today.strftime("%Y-%m"):
+        trend_end = today.day
+    daily_spending = [{"date": parsed.replace(day=number).isoformat(),
+                       "amount_minor": sum(e.amount_minor for e in expenses if e.spent_on == parsed.replace(day=number).isoformat())}
+                      for number in range(1, trend_end + 1)]
     return {"month": month, "today": today.isoformat(), "timezone": u.timezone, "currency": "LKR", "budget": dump(budget) if budget else None,
             "categories": [dump(c) for c in categories],
             "expenses": [{**dump(e), "category_name": category_map[e.category_id].name,
-                          "category_color": category_map[e.category_id].color_key} for e in expenses],
+                          "category_color": category_map[e.category_id].color_key,
+                          "account_name": account_map[e.account_id].name if e.account_id in account_map else None} for e in expenses],
             "spent_minor": spent, "remaining_minor": remaining, "over_budget": remaining is not None and remaining < 0,
-            "daily_allowance_minor": daily_allowance, "breakdown": breakdown}
+            "daily_allowance_minor": daily_allowance, "breakdown": breakdown,
+            "accounts": [dump(a) for a in accounts], "account_total_minor": account_total,
+            "envelopes": sorted(envelope_rows, key=lambda row: row["category_name"]),
+            "essential_reserved_minor": essential_reserved,
+            "bills": [{**dump(b), "account_name": account_map[b.account_id].name if b.account_id in account_map else None} for b in bills],
+            "unpaid_bills_minor": unpaid_bills, "safe_to_spend_minor": safe_to_spend,
+            "safe_days": safe_days, "daily_spending": daily_spending}
 
 @router.get("/money")
 def money(month: str, db: Session = Depends(session)):
@@ -447,11 +545,87 @@ def delete_category(id: str, confirm: bool = Query(False), db: Session = Depends
     db.commit()
     return {"deleted": True}
 
+@router.post("/financial-accounts", status_code=201)
+def add_financial_account(data: AccountIn, db: Session = Depends(session)):
+    return save(db, FinancialAccount(user_id=user(db).id, **data.model_dump()))
+
+@router.put("/financial-accounts/{id}")
+def edit_financial_account(id: str, data: AccountIn, db: Session = Depends(session)):
+    account = owned(db, FinancialAccount, id)
+    for key, value in data.model_dump().items():
+        setattr(account, key, value)
+    return save(db, account)
+
+@router.post("/financial-accounts/{id}/archive")
+def archive_financial_account(id: str, restore: bool = False, db: Session = Depends(session)):
+    account = owned(db, FinancialAccount, id)
+    account.archived_at = None if restore else datetime.now(timezone.utc)
+    return save(db, account)
+
+@router.put("/budgets/{month}/envelopes/{category_id}")
+def set_expense_envelope(month: str, category_id: str, data: EnvelopeIn, db: Session = Depends(session)):
+    parsed = month_key(month)
+    budget = budget_for(db, parsed.year, parsed.month)
+    if budget is None:
+        raise HTTPException(422, "Set this month's budget first")
+    category = owned(db, ExpenseCategory, category_id)
+    if category.archived_at:
+        raise HTTPException(422, "Restore the category first")
+    envelope = db.scalar(select(ExpenseEnvelope).where(
+        ExpenseEnvelope.budget_month_id == budget.id, ExpenseEnvelope.category_id == category.id))
+    if envelope is None:
+        envelope = ExpenseEnvelope(budget_month_id=budget.id, category_id=category.id, **data.model_dump())
+    else:
+        envelope.limit_minor = data.limit_minor
+        envelope.essential = data.essential
+    return save(db, envelope)
+
+@router.post("/upcoming-bills", status_code=201)
+def add_upcoming_bill(data: BillIn, db: Session = Depends(session)):
+    day(data.due_on)
+    account_for(db, data.account_id)
+    bill = UpcomingBill(user_id=user(db).id, **data.model_dump())
+    db.add(bill)
+    db.flush()
+    if bill.recurring_monthly:
+        bill.series_id = bill.id
+    db.commit()
+    db.refresh(bill)
+    return dump(bill)
+
+@router.put("/upcoming-bills/{id}")
+def edit_upcoming_bill(id: str, data: BillIn, db: Session = Depends(session)):
+    bill = owned(db, UpcomingBill, id)
+    day(data.due_on)
+    account_for(db, data.account_id)
+    for key, value in data.model_dump().items():
+        setattr(bill, key, value)
+    if data.recurring_monthly and bill.series_id is None:
+        bill.series_id = bill.id
+    if not data.recurring_monthly and bill.id == bill.series_id:
+        bill.series_id = None
+    return save(db, bill)
+
+@router.post("/upcoming-bills/{id}/paid")
+def mark_upcoming_bill_paid(id: str, paid: bool = True, db: Session = Depends(session)):
+    bill = owned(db, UpcomingBill, id)
+    bill.paid_at = datetime.now(timezone.utc) if paid else None
+    return save(db, bill)
+
+@router.post("/upcoming-bills/{id}/archive")
+def archive_upcoming_bill(id: str, restore: bool = False, db: Session = Depends(session)):
+    bill = owned(db, UpcomingBill, id)
+    bill.archived_at = None if restore else datetime.now(timezone.utc)
+    if not restore and bill.id == bill.series_id:
+        bill.recurring_monthly = False
+    return save(db, bill)
+
 def validate_expense(db: Session, data: ExpenseIn):
     spent_on = day(data.spent_on)
     category = owned(db, ExpenseCategory, data.category_id)
     if category.archived_at:
         raise HTTPException(422, "Restore the category first")
+    account_for(db, data.account_id)
     return spent_on
 
 @router.post("/expenses", status_code=201)
@@ -460,6 +634,9 @@ def add_expense(data: ExpenseIn, db: Session = Depends(session)):
     budget = budget_for(db, spent_on.year, spent_on.month)
     if budget is None:
         raise HTTPException(422, "Set this month's budget first")
+    account = account_for(db, data.account_id)
+    if account:
+        account.balance_minor -= data.amount_minor
     return save(db, Expense(budget_month_id=budget.id, **data.model_dump()))
 
 @router.post("/expenses/quick", status_code=201)
@@ -471,12 +648,15 @@ def add_expense_with_category(data: QuickExpenseIn, db: Session = Depends(sessio
     budget = budget_for(db, spent_on.year, spent_on.month)
     if budget is None:
         raise HTTPException(422, "Set this month's budget first")
+    account = account_for(db, data.account_id)
     category = ExpenseCategory(user_id=user(db).id, name=name, color_key="lime")
     db.add(category)
     db.flush()
     expense = Expense(budget_month_id=budget.id, category_id=category.id,
                       amount_minor=data.amount_minor, spent_on=data.spent_on,
-                      description=data.description)
+                      description=data.description, account_id=data.account_id)
+    if account:
+        account.balance_minor -= data.amount_minor
     db.add(expense)
     db.commit()
     db.refresh(expense)
@@ -492,6 +672,12 @@ def edit_expense(id: str, data: ExpenseIn, db: Session = Depends(session)):
     budget = budget_for(db, spent_on.year, spent_on.month)
     if budget is None:
         raise HTTPException(422, "Set the destination month's budget first")
+    old_account = account_for(db, expense.account_id, require_active=False)
+    new_account = account_for(db, data.account_id)
+    if old_account:
+        old_account.balance_minor += expense.amount_minor
+    if new_account:
+        new_account.balance_minor -= data.amount_minor
     for key, value in data.model_dump().items():
         setattr(expense, key, value)
     expense.budget_month_id = budget.id
@@ -504,21 +690,31 @@ def delete_expense(id: str, confirm: bool = Query(False), db: Session = Depends(
     expense = get(db, Expense, id)
     if get(db, BudgetMonth, expense.budget_month_id).user_id != user(db).id:
         raise HTTPException(404, "Record not found")
+    account = account_for(db, expense.account_id, require_active=False)
+    if account:
+        account.balance_minor += expense.amount_minor
     db.delete(expense)
     db.commit()
     return {"deleted": True}
 
 EXPORT_TABLES = (LifeArea, Track, Module, Vision, RecurringWeeklyGoal, Goal, WeeklyPlan, Task, CalendarBlock, FocusPreferences, FocusSession, CompletionLog,
-                 Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings, BudgetMonth, ExpenseCategory, Expense)
+                 Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings, BudgetMonth, ExpenseCategory,
+                 FinancialAccount, ExpenseEnvelope, UpcomingBill, Expense)
 LEGACY_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls not in (RecurringWeeklyGoal, FocusPreferences, FocusSession)}
 PRE_FOCUS_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls not in (FocusPreferences, FocusSession)}
 NO_RECURRING_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls is not RecurringWeeklyGoal}
+MONEY_TOOL_NAMES = {FinancialAccount.__tablename__, ExpenseEnvelope.__tablename__, UpcomingBill.__tablename__}
+VALID_EXPORT_NAME_SETS = (LEGACY_EXPORT_NAMES, PRE_FOCUS_EXPORT_NAMES, NO_RECURRING_EXPORT_NAMES,
+                          {cls.__tablename__ for cls in EXPORT_TABLES},
+                          LEGACY_EXPORT_NAMES - MONEY_TOOL_NAMES, PRE_FOCUS_EXPORT_NAMES - MONEY_TOOL_NAMES,
+                          NO_RECURRING_EXPORT_NAMES - MONEY_TOOL_NAMES,
+                          {cls.__tablename__ for cls in EXPORT_TABLES} - MONEY_TOOL_NAMES)
 
 def validate_backup(payload: dict):
     if payload.get("format") != "aniro-json-v1" or not isinstance(payload.get("user"), dict):
         raise HTTPException(422, "Choose an Aniro JSON backup")
     tables = payload.get("tables")
-    if not isinstance(tables, dict) or set(tables) not in (LEGACY_EXPORT_NAMES, PRE_FOCUS_EXPORT_NAMES, NO_RECURRING_EXPORT_NAMES, {cls.__tablename__ for cls in EXPORT_TABLES}):
+    if not isinstance(tables, dict) or set(tables) not in VALID_EXPORT_NAME_SETS:
         raise HTTPException(422, "Backup tables do not match this version of Aniro")
     source_user = payload["user"].get("id")
     if not isinstance(source_user, str) or not source_user:
@@ -535,6 +731,7 @@ def validate_backup(payload: dict):
             if cls in (Goal, Task): allowed_missing.update({"recurrence_id", "recurrence_frequency", "occurrence_date"})
             if cls is Goal: allowed_missing.add("recurring_template_id")
             if cls is CompletionLog: allowed_missing.add("focus_session_id")
+            if cls is Expense: allowed_missing.add("account_id")
             legacy = isinstance(row, dict) and not (set(row) - columns) and (columns - set(row)).issubset(allowed_missing)
             if not isinstance(row, dict) or (set(row) != columns and not legacy) or not isinstance(row.get("id", row.get("user_id")), str):
                 raise HTTPException(422, f"Invalid {cls.__tablename__} record")
@@ -592,6 +789,7 @@ def restore_backup(payload: dict, confirm: bool = Query(False), db: Session = De
                     row.setdefault("recurrence_frequency", None)
                     row.setdefault("occurrence_date", None)
                 if cls is CompletionLog: row.setdefault("focus_session_id", None)
+                if cls is Expense: row.setdefault("account_id", None)
                 if row.get("user_id") == source_user:
                     row["user_id"] = current_user.id
                 for column in cls.__table__.columns:
@@ -642,6 +840,9 @@ def export_json(db: Session = Depends(session)):
                BalanceTarget: BalanceTarget.user_id == u.id, AreaBalanceTarget: AreaBalanceTarget.user_id == u.id,
                ReflectSettings: ReflectSettings.user_id == u.id,
                BudgetMonth: BudgetMonth.user_id == u.id, ExpenseCategory: ExpenseCategory.user_id == u.id,
+               FinancialAccount: FinancialAccount.user_id == u.id,
+               ExpenseEnvelope: ExpenseEnvelope.budget_month_id.in_(budget_ids),
+               UpcomingBill: UpcomingBill.user_id == u.id,
                Expense: Expense.budget_month_id.in_(budget_ids)}
     payload = {"format": "aniro-json-v1", "exported_at": datetime.now(timezone.utc).isoformat(),
                "user": dump(u), "tables": {cls.__tablename__: [dump(item) for item in db.scalars(select(cls).where(filters[cls]))]
@@ -667,3 +868,11 @@ def export_expenses_csv(month: str | None = None, db: Session = Depends(session)
                          category.name, f"{expense.amount_minor / 100:.2f}", expense.description])
     return Response(output.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="aniro-expenses.csv"'})
+
+@router.get("/export/expenses.pdf")
+def export_expenses_pdf(month: str, db: Session = Depends(session)):
+    summary = money_summary(db, month)
+    report = build_expense_pdf(summary, user(db).display_name)
+    filename = f"aniro-expenses-{month}.pdf"
+    return Response(report, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})

@@ -1,17 +1,21 @@
 import json
 import unittest
+from io import BytesIO
 from datetime import date, datetime
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
+from pypdf import PdfReader
 from db import Base
-from models import LifeArea, Track, Module, Habit, HabitCheckin, ExpenseCategory, Expense
+from models import LifeArea, Track, Module, Habit, HabitCheckin, ExpenseCategory, Expense, FinancialAccount
 from plan_api import current_user, TaskIn, BlockIn, ResultIn, add_task, add_block, block_result
 from main import GoalIn, VisionIn, add_goal, add_vision
 from stage3_api import (streak_stats, reflect_summary, BudgetIn, CategoryIn, ExpenseIn, QuickExpenseIn,
                         set_budget, add_category, add_expense, add_expense_with_category, edit_expense, delete_expense,
-                        money_summary, export_json, export_expenses_csv, TargetIn, set_area_target)
+                        money_summary, export_json, export_expenses_csv, export_expenses_pdf, TargetIn, set_area_target,
+                        AccountIn, EnvelopeIn, BillIn, add_financial_account, set_expense_envelope,
+                        add_upcoming_bill, mark_upcoming_bill_paid)
 
 WEEK = "2026-10-12"
 
@@ -116,6 +120,42 @@ class Stage3Tests(unittest.TestCase):
         self.assertEqual(self.db.scalar(select(func.count()).select_from(ExpenseCategory)), 1)
         self.assertEqual(self.db.get(Expense, created["id"]).amount_minor, 12500)
         self.assertEqual(money_summary(self.db, "2026-10", date(2026, 10, 18))["spent_minor"], 12500)
+
+    def test_expense_pdf_is_branded_and_contains_monthly_records(self):
+        set_budget("2026-10", BudgetIn(limit_minor=4000000), self.db)
+        category = add_category(CategoryIn(name="Food", color_key="health"), self.db)
+        add_expense(ExpenseIn(category_id=category["id"], amount_minor=125000,
+                              spent_on="2026-10-18", description="Weekly groceries"), self.db)
+        response = export_expenses_pdf("2026-10", self.db)
+        self.assertEqual(response.media_type, "application/pdf")
+        self.assertTrue(response.body.startswith(b"%PDF"))
+        text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(response.body)).pages)
+        self.assertIn("Aniro", text)
+        self.assertIn("October 2026 expense report", text)
+        self.assertIn("Weekly groceries", text)
+
+    def test_student_money_tools_protect_essentials_and_update_balances(self):
+        set_budget("2026-10", BudgetIn(limit_minor=4000000), self.db)
+        category = add_category(CategoryIn(name="Food", color_key="health"), self.db)
+        account = add_financial_account(AccountIn(name="Main bank", account_type="bank",
+                                                   balance_minor=3000000, color_key="lime"), self.db)
+        set_expense_envelope("2026-10", category["id"], EnvelopeIn(limit_minor=1000000, essential=True), self.db)
+        bill = add_upcoming_bill(BillIn(name="Boarding rent", amount_minor=500000, due_on="2026-10-20",
+                                        account_id=account["id"], recurring_monthly=True), self.db)
+        expense = add_expense(ExpenseIn(category_id=category["id"], account_id=account["id"], amount_minor=200000,
+                                        spent_on="2026-10-18", description="Groceries"), self.db)
+        summary = money_summary(self.db, "2026-10", date(2026, 10, 18))
+        self.assertEqual(summary["account_total_minor"], 2800000)
+        self.assertEqual(summary["essential_reserved_minor"], 800000)
+        self.assertEqual(summary["unpaid_bills_minor"], 500000)
+        self.assertEqual(summary["safe_days"], 14)
+        self.assertEqual(summary["safe_to_spend_minor"], 107142)
+        self.assertEqual(summary["daily_spending"][17]["amount_minor"], 200000)
+        self.assertEqual(summary["expenses"][0]["account_name"], "Main bank")
+        mark_upcoming_bill_paid(bill["id"], True, self.db)
+        self.assertEqual(money_summary(self.db, "2026-10", date(2026, 10, 18))["safe_to_spend_minor"], 142857)
+        delete_expense(expense["id"], True, self.db)
+        self.assertEqual(self.db.get(FinancialAccount, account["id"]).balance_minor, 3000000)
 
     def test_fresh_reflect_money_and_exports_contain_no_examples(self):
         reflect = reflect_summary(self.db, WEEK, date(2026, 10, 18))

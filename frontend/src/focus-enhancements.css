@@ -74,7 +74,7 @@
 .focusParkingHead>span{display:flex;align-items:center;gap:6px;color:#344532}
 .focusParkingHead strong{font-size:11px}
 .focusParkingHead>small{color:#778274;font-size:9px}
-.focusParking textarea{width:100%;min-height:68px;resize:vertical;border:1px solid #e0e6dc;border-radius:10px;background:#fafcf8;padding:9px 10px;color:#293428;font-size:11px;line-height:1.45}
+.focusParkingList{display:grid;gap:6px;margin-bottom:8px}.focusParkingList>div{display:flex;align-items:flex-start;gap:7px;padding:8px 8px 8px 10px;border:1px solid #dce6d4;border-radius:10px;background:#f6faef;color:#344332}.focusParkingList span{min-width:0;flex:1;font-size:10px;line-height:1.45;overflow-wrap:anywhere}.focusParkingList button{display:grid;place-items:center;flex:0 0 auto;padding:2px;border:0;border-radius:6px;background:transparent;color:#6c7867}.focusParkingList button:hover{background:#e7efdd;color:#31442a}.focusParkingInput{display:flex;align-items:center;gap:6px}.focusParkingInput input{width:100%;min-width:0;min-height:38px;border:1px solid #dce4d7;border-radius:10px;background:#fafcf8;padding:8px 10px;color:#293428;font-size:10px}.focusParkingInput input:focus{outline:2px solid #8fbd4b;outline-offset:1px;border-color:#6f9d37}.focusParkingInput button{min-height:36px;padding:7px 10px;border:0;border-radius:9px;background:#36542d;color:#fff;font-size:9px;font-weight:850}.focusParkingInput button:disabled{opacity:.45}
 .focusParking>span{display:block;margin-top:5px;color:#8a9287;font-size:8px;text-align:right}
 .focusReset{display:grid;grid-template-columns:1fr 1fr;gap:1px;padding:6px;background:#f7f9f5}
 .focusReset>div{display:flex;align-items:center;gap:7px;padding:8px}

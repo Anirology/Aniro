@@ -1,0 +1,17 @@
+.reflectPage {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Daily check-ins stay directly below the weekly story; deeper analysis follows. */
+.reflectPage > .secondaryDetails:first-of-type {
+  order: 1;
+}
+
+.reflectPage > .secondaryDetails:last-of-type {
+  order: 2;
+}
+
+.reflectPage > .focusResults {
+  order: 3;
+}

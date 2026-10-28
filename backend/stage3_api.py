@@ -17,9 +17,10 @@ from sqlalchemy.orm import Session
 from db import SessionLocal
 from models import (User, LifeArea, Track, Module, Vision, Goal, RecurringWeeklyGoal, WeeklyPlan, Task, CalendarBlock,
                     CompletionLog, FocusPreferences, FocusSession, Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings,
-                    BudgetMonth, ExpenseCategory, FinancialAccount, ExpenseEnvelope, UpcomingBill, Expense,
+                    BudgetMonth, ExpenseCategory, FinancialAccount, MoneyMovement, ExpenseEnvelope, UpcomingBill, Expense,
                     GoogleIntegration, CoachUsage, BackupSnapshot)
 from money_pdf import build_expense_pdf
+from weekly_pdf import build_weekly_pdf
 
 router = APIRouter(prefix="/api")
 
@@ -125,6 +126,15 @@ class AccountIn(BaseModel):
     account_type: Literal["cash", "bank", "ewallet"] = "bank"
     balance_minor: int = Field(ge=-1_000_000_000, le=1_000_000_000)
     color_key: str = Field(default="lime", max_length=30)
+
+class MoneyMovementIn(BaseModel):
+    kind: Literal["income", "transfer"]
+    amount_minor: int = Field(gt=0, le=1_000_000_000)
+    destination_account_id: str
+    source_account_id: str | None = None
+    source_label: str | None = Field(default=None, max_length=120)
+    occurred_on: str
+    note: str = Field(default="", max_length=240)
 
 class EnvelopeIn(BaseModel):
     limit_minor: int = Field(ge=0, le=1_000_000_000)
@@ -439,6 +449,9 @@ def money_summary(db: Session, month: str, today_override: date | None = None):
     accounts = list(db.scalars(select(FinancialAccount).where(
         FinancialAccount.user_id == u.id, FinancialAccount.archived_at.is_(None)).order_by(FinancialAccount.name)))
     account_map = {a.id: a for a in accounts}
+    movements = list(db.scalars(select(MoneyMovement).where(
+        MoneyMovement.user_id == u.id, MoneyMovement.occurred_on.like(month + "-%"))
+        .order_by(MoneyMovement.occurred_on.desc(), MoneyMovement.created_at.desc()).limit(20)))
     expenses = list(db.scalars(select(Expense).where(Expense.budget_month_id == budget.id).order_by(Expense.spent_on.desc(), Expense.id.desc()))) if budget else []
     spent = sum(e.amount_minor for e in expenses)
     remaining = budget.limit_minor - spent if budget else None
@@ -497,6 +510,10 @@ def money_summary(db: Session, month: str, today_override: date | None = None):
             "spent_minor": spent, "remaining_minor": remaining, "over_budget": remaining is not None and remaining < 0,
             "daily_allowance_minor": daily_allowance, "breakdown": breakdown,
             "accounts": [dump(a) for a in accounts], "account_total_minor": account_total,
+            "movements": [{**dump(m),
+                           "source_name": account_map[m.source_account_id].name if m.source_account_id in account_map else m.source_label,
+                           "destination_name": account_map[m.destination_account_id].name if m.destination_account_id in account_map else "Archived balance"}
+                          for m in movements],
             "envelopes": sorted(envelope_rows, key=lambda row: row["category_name"]),
             "essential_reserved_minor": essential_reserved,
             "bills": [{**dump(b), "account_name": account_map[b.account_id].name if b.account_id in account_map else None} for b in bills],
@@ -548,6 +565,38 @@ def delete_category(id: str, confirm: bool = Query(False), db: Session = Depends
 @router.post("/financial-accounts", status_code=201)
 def add_financial_account(data: AccountIn, db: Session = Depends(session)):
     return save(db, FinancialAccount(user_id=user(db).id, **data.model_dump()))
+
+@router.post("/money-movements", status_code=201)
+def add_money_movement(data: MoneyMovementIn, db: Session = Depends(session)):
+    day(data.occurred_on)
+    destination = account_for(db, data.destination_account_id)
+    source = None
+    source_label = (data.source_label or "").strip() or None
+    if data.kind == "income":
+        if data.source_account_id:
+            raise HTTPException(422, "Income comes from a source such as parents or salary, not another balance")
+        if not source_label:
+            raise HTTPException(422, "Enter where this income came from")
+    else:
+        if not data.source_account_id:
+            raise HTTPException(422, "Choose the balance money is coming from")
+        source = account_for(db, data.source_account_id)
+        if source.id == destination.id:
+            raise HTTPException(422, "Choose two different balances")
+        if source.balance_minor < data.amount_minor:
+            raise HTTPException(422, f"{source.name} does not have enough money for this transfer")
+        source.balance_minor -= data.amount_minor
+        source_label = None
+    destination.balance_minor += data.amount_minor
+    movement = MoneyMovement(user_id=user(db).id, kind=data.kind,
+                             source_account_id=source.id if source else None,
+                             destination_account_id=destination.id, source_label=source_label,
+                             amount_minor=data.amount_minor, occurred_on=data.occurred_on,
+                             note=data.note.strip())
+    db.add(movement)
+    db.commit()
+    db.refresh(movement)
+    return dump(movement)
 
 @router.put("/financial-accounts/{id}")
 def edit_financial_account(id: str, data: AccountIn, db: Session = Depends(session)):
@@ -699,16 +748,20 @@ def delete_expense(id: str, confirm: bool = Query(False), db: Session = Depends(
 
 EXPORT_TABLES = (LifeArea, Track, Module, Vision, RecurringWeeklyGoal, Goal, WeeklyPlan, Task, CalendarBlock, FocusPreferences, FocusSession, CompletionLog,
                  Habit, HabitCheckin, BalanceTarget, AreaBalanceTarget, ReflectSettings, BudgetMonth, ExpenseCategory,
-                 FinancialAccount, ExpenseEnvelope, UpcomingBill, Expense)
+                 FinancialAccount, MoneyMovement, ExpenseEnvelope, UpcomingBill, Expense)
 LEGACY_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls not in (RecurringWeeklyGoal, FocusPreferences, FocusSession)}
 PRE_FOCUS_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls not in (FocusPreferences, FocusSession)}
 NO_RECURRING_EXPORT_NAMES = {cls.__tablename__ for cls in EXPORT_TABLES if cls is not RecurringWeeklyGoal}
-MONEY_TOOL_NAMES = {FinancialAccount.__tablename__, ExpenseEnvelope.__tablename__, UpcomingBill.__tablename__}
+MONEY_TOOL_NAMES = {FinancialAccount.__tablename__, MoneyMovement.__tablename__, ExpenseEnvelope.__tablename__, UpcomingBill.__tablename__}
+MOVEMENT_NAMES = {MoneyMovement.__tablename__}
 VALID_EXPORT_NAME_SETS = (LEGACY_EXPORT_NAMES, PRE_FOCUS_EXPORT_NAMES, NO_RECURRING_EXPORT_NAMES,
                           {cls.__tablename__ for cls in EXPORT_TABLES},
                           LEGACY_EXPORT_NAMES - MONEY_TOOL_NAMES, PRE_FOCUS_EXPORT_NAMES - MONEY_TOOL_NAMES,
                           NO_RECURRING_EXPORT_NAMES - MONEY_TOOL_NAMES,
-                          {cls.__tablename__ for cls in EXPORT_TABLES} - MONEY_TOOL_NAMES)
+                          {cls.__tablename__ for cls in EXPORT_TABLES} - MONEY_TOOL_NAMES,
+                          LEGACY_EXPORT_NAMES - MOVEMENT_NAMES, PRE_FOCUS_EXPORT_NAMES - MOVEMENT_NAMES,
+                          NO_RECURRING_EXPORT_NAMES - MOVEMENT_NAMES,
+                          {cls.__tablename__ for cls in EXPORT_TABLES} - MOVEMENT_NAMES)
 
 def validate_backup(payload: dict):
     if payload.get("format") != "aniro-json-v1" or not isinstance(payload.get("user"), dict):
@@ -841,6 +894,7 @@ def export_json(db: Session = Depends(session)):
                ReflectSettings: ReflectSettings.user_id == u.id,
                BudgetMonth: BudgetMonth.user_id == u.id, ExpenseCategory: ExpenseCategory.user_id == u.id,
                FinancialAccount: FinancialAccount.user_id == u.id,
+               MoneyMovement: MoneyMovement.user_id == u.id,
                ExpenseEnvelope: ExpenseEnvelope.budget_month_id.in_(budget_ids),
                UpcomingBill: UpcomingBill.user_id == u.id,
                Expense: Expense.budget_month_id.in_(budget_ids)}
@@ -876,3 +930,38 @@ def export_expenses_pdf(month: str, db: Session = Depends(session)):
     filename = f"aniro-expenses-{month}.pdf"
     return Response(report, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+@router.get("/export/weekly.pdf")
+def export_weekly_pdf(week: str, db: Session = Depends(session)):
+    start = week_start(week)
+    end = start + timedelta(days=6)
+    u = user(db)
+    cutoff = min(local_today(db), end)
+    summary = reflect_summary(db, week, cutoff)
+    expenses = list(db.execute(select(Expense, ExpenseCategory).join(
+        ExpenseCategory, Expense.category_id == ExpenseCategory.id).join(
+        BudgetMonth, Expense.budget_month_id == BudgetMonth.id).where(
+        BudgetMonth.user_id == u.id, Expense.spent_on >= start.isoformat(),
+        Expense.spent_on <= end.isoformat())).all())
+    movements = list(db.scalars(select(MoneyMovement).where(
+        MoneyMovement.user_id == u.id, MoneyMovement.occurred_on >= start.isoformat(),
+        MoneyMovement.occurred_on <= end.isoformat())))
+    categories = {}
+    for expense, category in expenses:
+        categories[category.name] = categories.get(category.name, 0) + expense.amount_minor
+    money = lambda amount: f"LKR {amount / 100:,.2f}"
+    months = []
+    for month in sorted({start.strftime('%Y-%m'), end.strftime('%Y-%m')}):
+        year, number = map(int, month.split('-'))
+        budget = budget_for(db, year, number)
+        spent = sum(db.scalars(select(Expense.amount_minor).where(Expense.budget_month_id == budget.id))) if budget else 0
+        months.append([month, money(budget.limit_minor) if budget else 'Not set', money(spent),
+                       money(budget.limit_minor-spent) if budget else 'Not set'])
+    finance = {'spent': sum(e.amount_minor for e, _ in expenses),
+               'income': sum(m.amount_minor for m in movements if m.kind == 'income'),
+               'transfers': sum(m.amount_minor for m in movements if m.kind == 'transfer'),
+               'categories': [[name, money(amount)] for name, amount in sorted(categories.items(), key=lambda item: -item[1])],
+               'months': months}
+    report = build_weekly_pdf(summary, finance, u.display_name)
+    return Response(report, media_type='application/pdf',
+                    headers={'Content-Disposition': f'attachment; filename="aniro-weekly-{week}.pdf"'})

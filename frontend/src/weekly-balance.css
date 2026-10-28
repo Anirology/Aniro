@@ -1,0 +1,207 @@
+.weeklyBalancePanel {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.reflectPage .reflectBalanceLayout {
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .reflectPage .reflectBalanceLayout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.balanceCategoryGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.balanceCategory {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid color-mix(in srgb, var(--line) 74%, var(--tone));
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--tone) 5%, var(--surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tone) 72%, var(--ink));
+}
+
+.balanceCategoryHead {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.balanceCategoryIcon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid color-mix(in srgb, var(--tone) 22%, var(--line));
+  border-radius: 10px;
+  color: color-mix(in srgb, var(--tone) 56%, var(--ink));
+  background: color-mix(in srgb, var(--tone) 9%, var(--surface));
+}
+
+.balanceCategoryHead h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.3;
+  letter-spacing: -.2px;
+}
+
+.balanceCategoryHead p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 11px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.balanceCategoryHead p span {
+  white-space: nowrap;
+}
+
+.balanceCategoryHead p b {
+  color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.balanceCategoryHead > strong {
+  align-self: start;
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.balanceCategoryProgress,
+.balanceTrackProgress {
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--line) 76%, var(--surface));
+}
+
+.balanceCategoryProgress {
+  height: 5px;
+  margin: 13px 0;
+}
+
+.balanceCategoryProgress > i,
+.balanceTrackProgress > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--tone) 68%, var(--ink));
+  transition: width .22s ease;
+}
+
+.balanceTrackList {
+  display: grid;
+  gap: 7px;
+}
+
+.balanceTrack {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--line) 92%, var(--tone));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--paper) 54%, var(--surface));
+}
+
+.balanceTrackTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.balanceTrackTop > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.balanceTrack h4 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.balanceTrack p {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.balanceTrack p i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 65%, transparent);
+}
+
+.balanceTrack button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.balanceTrack button:hover {
+  border-color: var(--line);
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.balanceTrack button:focus-visible {
+  outline-width: 2px;
+}
+
+.balanceTrackProgress {
+  height: 3px;
+  margin-top: 9px;
+}
+
+@container (min-width: 680px) {
+  .balanceCategoryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 440px) {
+  .balanceCategory {
+    padding: 13px;
+  }
+
+  .balanceCategoryHead {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .balanceCategoryHead > strong {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .balanceCategoryProgress > i,
+  .balanceTrackProgress > i {
+    transition: none;
+  }
+}

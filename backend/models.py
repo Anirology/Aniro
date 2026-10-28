@@ -250,6 +250,19 @@ class FinancialAccount(Base):
     color_key: Mapped[str] = mapped_column(String(30), default="lime")
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+class MoneyMovement(Base):
+    __tablename__ = "money_movements"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    source_account_id: Mapped[str | None] = mapped_column(ForeignKey("financial_accounts.id"), index=True)
+    destination_account_id: Mapped[str] = mapped_column(ForeignKey("financial_accounts.id"), index=True)
+    source_label: Mapped[str | None] = mapped_column(String(120))
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    occurred_on: Mapped[str] = mapped_column(String(10), index=True)
+    note: Mapped[str] = mapped_column(String(240), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
 class ExpenseEnvelope(Base):
     __tablename__ = "expense_envelopes"
     __table_args__ = (UniqueConstraint("budget_month_id", "category_id", name="envelope_budget_category"),)

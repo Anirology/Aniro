@@ -1,0 +1,116 @@
+.moneyQuickBar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.moneyQuickBar button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.moneyActivity {
+  display: grid;
+  gap: 0;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.moneyActivity > div:first-child {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.moneyActivity > div:first-child strong {
+  font-size: 12px;
+}
+
+.moneyActivity > div:first-child span {
+  color: #73806f;
+  font-size: 9px;
+}
+
+.moneyActivity article {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid #edf1e9;
+}
+
+.moneyActivity article > span {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+}
+
+.moneyActivity article > span svg {
+  width: 17px;
+  height: 17px;
+}
+
+.incomeMovement {
+  color: #3f6728;
+  background: #edf7df;
+}
+
+.transferMovement {
+  color: #36566b;
+  background: #eaf3f7;
+}
+
+.moneyActivity article > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.moneyActivity article > div strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.moneyActivity article > div strong svg {
+  width: 12px;
+  flex: none;
+}
+
+.moneyActivity article small {
+  color: #788375;
+  font-size: 9px;
+}
+
+.moneyActivity article b {
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 700px) {
+  .moneyQuickBar button {
+    min-width: calc(50% - 5px);
+  }
+}
+
+@media (max-width: 470px) {
+  .moneyQuickBar button {
+    width: 100%;
+  }
+
+  .moneyActivity article {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .moneyActivity article b {
+    grid-column: 2;
+  }
+}

@@ -40,6 +40,8 @@
 
 .focusSide{gap:11px}
 .focusBuddy,.focusSessionCard,.focusParking,.focusReset{border:1px solid #dfe6da;border-radius:17px;background:#fff;box-shadow:0 5px 20px #22312209}
+.focusSessionCard{order:-2}
+.focusBuddy{order:-1}
 .focusBuddy{padding:15px;background:linear-gradient(145deg,#263b2a,#1f3023);color:#fff;border-color:#2b432f}
 .focusBuddyHead{display:flex;align-items:center;gap:9px}
 .focusBuddyHead>span{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#c6fb4a;color:#253b25}
@@ -88,6 +90,6 @@
 
 @keyframes focusPulse{0%,100%{opacity:1}50%{opacity:.45}}
 @media(max-width:1050px){.focusLayout{grid-template-columns:minmax(0,1fr) 285px}}
-@media(max-width:820px){.focusLayout{grid-template-columns:1fr}.focusSide{grid-template-columns:repeat(2,minmax(0,1fr))}.focusBuddy,.focusCustomize{grid-column:1/-1}}
+@media(max-width:820px){.focusLayout{grid-template-columns:1fr}.focusSide{grid-template-columns:repeat(2,minmax(0,1fr))}.focusSessionCard,.focusBuddy,.focusCustomize{grid-column:1/-1}}
 @media(max-width:620px){.focusPageHeader{align-items:flex-start}.focusHeaderActions{width:100%;justify-content:space-between}.focusHeaderIcon{order:-1}.focusStart{padding:24px 19px}.focusPresets{grid-template-columns:1fr}.focusPresets button{min-height:74px}.focusSide{grid-template-columns:1fr}.focusBuddy,.focusCustomize{grid-column:auto}.focusSessionMeta{grid-template-columns:1fr}.focusReset{grid-template-columns:1fr}.focusReset>div+div{border-left:0;border-top:1px solid #e1e6de}}
 @media(prefers-reduced-motion:reduce){.focusLiveState.isRunning i{animation:none}.focusProgress i{transition:none}}

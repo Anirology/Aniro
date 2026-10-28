@@ -8,14 +8,14 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from pypdf import PdfReader
 from db import Base
-from models import LifeArea, Track, Module, Habit, HabitCheckin, ExpenseCategory, Expense, FinancialAccount
+from models import LifeArea, Track, Module, Habit, HabitCheckin, ExpenseCategory, Expense, FinancialAccount, MoneyMovement
 from plan_api import current_user, TaskIn, BlockIn, ResultIn, add_task, add_block, block_result
 from main import GoalIn, VisionIn, add_goal, add_vision
 from stage3_api import (streak_stats, reflect_summary, BudgetIn, CategoryIn, ExpenseIn, QuickExpenseIn,
                         set_budget, add_category, add_expense, add_expense_with_category, edit_expense, delete_expense,
                         money_summary, export_json, export_expenses_csv, export_expenses_pdf, TargetIn, set_area_target,
-                        AccountIn, EnvelopeIn, BillIn, add_financial_account, set_expense_envelope,
-                        add_upcoming_bill, mark_upcoming_bill_paid)
+                        AccountIn, MoneyMovementIn, EnvelopeIn, BillIn, add_financial_account, add_money_movement,
+                        set_expense_envelope, add_upcoming_bill, mark_upcoming_bill_paid)
 
 WEEK = "2026-10-12"
 
@@ -156,6 +156,27 @@ class Stage3Tests(unittest.TestCase):
         self.assertEqual(money_summary(self.db, "2026-10", date(2026, 10, 18))["safe_to_spend_minor"], 142857)
         delete_expense(expense["id"], True, self.db)
         self.assertEqual(self.db.get(FinancialAccount, account["id"]).balance_minor, 3000000)
+
+    def test_income_and_transfer_keep_account_math_auditable(self):
+        bank = add_financial_account(AccountIn(name="Main bank", account_type="bank",
+                                               balance_minor=1000000, color_key="lime"), self.db)
+        wallet = add_financial_account(AccountIn(name="Cash wallet", account_type="cash",
+                                                 balance_minor=100000, color_key="health"), self.db)
+        add_money_movement(MoneyMovementIn(kind="income", amount_minor=500000,
+                                           destination_account_id=bank["id"], source_label="Parents",
+                                           occurred_on="2026-10-18", note="Monthly support"), self.db)
+        add_money_movement(MoneyMovementIn(kind="transfer", amount_minor=200000,
+                                           source_account_id=bank["id"], destination_account_id=wallet["id"],
+                                           occurred_on="2026-10-19", note="Cash withdrawal"), self.db)
+        summary = money_summary(self.db, "2026-10", date(2026, 10, 19))
+        self.assertEqual(self.db.get(FinancialAccount, bank["id"]).balance_minor, 1300000)
+        self.assertEqual(self.db.get(FinancialAccount, wallet["id"]).balance_minor, 300000)
+        self.assertEqual(summary["account_total_minor"], 1600000)
+        self.assertEqual([row["kind"] for row in summary["movements"]], ["transfer", "income"])
+        self.assertEqual(summary["movements"][0]["source_name"], "Main bank")
+        self.assertEqual(summary["movements"][0]["destination_name"], "Cash wallet")
+        self.assertEqual(summary["movements"][1]["source_name"], "Parents")
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(MoneyMovement)), 2)
 
     def test_fresh_reflect_money_and_exports_contain_no_examples(self):
         reflect = reflect_summary(self.db, WEEK, date(2026, 10, 18))

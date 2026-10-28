@@ -87,11 +87,15 @@ def ensure_hosted_schema():
                 connection.execute(text("CREATE INDEX ix_expenses_account_id ON expenses (account_id)"))
                 connection.execute(text("UPDATE alembic_version SET version_num = '0012_student_money_tools'"))
                 revision = "0012_student_money_tools"
-            if revision != "0012_student_money_tools":
+            if revision == "0012_student_money_tools":
+                Base.metadata.tables["money_movements"].create(connection, checkfirst=True)
+                connection.execute(text("UPDATE alembic_version SET version_num = '0013_money_movements'"))
+                revision = "0013_money_movements"
+            if revision != "0013_money_movements":
                 raise RuntimeError(f"Unsupported hosted schema revision: {revision}")
             return
         if tables.intersection(Base.metadata.tables):
             raise RuntimeError("Hosted database already has Aniro tables but no migration version")
         Base.metadata.create_all(connection)
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0012_student_money_tools')"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0013_money_movements')"))
